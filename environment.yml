@@ -1,4 +1,4 @@
-name: kesper
+name: cospr
 channels:
   - cyclus
   - pytorch
@@ -30,7 +30,6 @@ dependencies:
   - ncurses=6.1=he6710b0_1
   - numpy-base=1.18.1=py36hde5b4d6_1
   - openssl=1.1.1e=h7b6447c_0
-  - pip=19.1.1=py36_0
   - python=3.6.9=h265db76_0
   - readline=7.0=h7b6447c_5
   - setuptools=41.0.1=py36_0
@@ -62,6 +61,7 @@ dependencies:
     - parso==0.6.2
     - pexpect==4.2.1
     - pickleshare==0.7.5
+    - pip==20.0.2
     - prettytable==0.7.2
     - prompt-toolkit==3.0.4
     - ptyprocess==0.6.0
@@ -84,5 +84,5 @@ dependencies:
     - urllib3==1.25.3
     - wcwidth==0.1.8
     - werkzeug==0.15.5
-prefix: /home/jinhyuk/miniconda3/envs/kesper
+prefix: /home/jinhyuk/miniconda3/envs/cospr
 

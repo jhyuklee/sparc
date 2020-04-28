@@ -45,7 +45,7 @@ nltk.download('punkt')
 nltk.download('stopwords')
 
 
-class NaturalKB(object):
+class DenSPIServer(object):
     def __init__(self, args):
         self.args = args
         # IP and Ports

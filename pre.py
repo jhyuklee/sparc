@@ -13,6 +13,7 @@ import numpy as np
 import copy
 import unicodedata
 from tqdm import tqdm
+from tfidf_doc_ranker import TfidfDocRanker
 
 import tokenization
 from post import _improve_answer_span, _check_is_max_context, get_final_text_
@@ -22,7 +23,6 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 NO_ANS = -1
-special_stat = {}
 
 
 class SquadExample(object):
@@ -38,8 +38,7 @@ class SquadExample(object):
                  end_position=None,
                  title="",
                  doc_idx=0,
-                 par_idx=0,
-                 metadata=None):
+                 par_idx=0):
         self.qas_id = qas_id
         self.question_text = question_text
         self.paragraph_text = paragraph_text
@@ -50,7 +49,6 @@ class SquadExample(object):
         self.title = title
         self.doc_idx = doc_idx
         self.par_idx = par_idx
-        self.metadata = metadata
 
     def __str__(self):
         return self.__repr__()
@@ -66,36 +64,6 @@ class SquadExample(object):
             s += ", end_position: %d" % (self.end_position)
         return s
 
-
-class NQExample(object):
-    """A single training/test example for simple sequence classification."""
-
-    def __init__(self,
-                 qas_id,
-                 question_text,
-                 doc_tokens,
-                 paragraph_indices=None,
-                 orig_answer_text=None,
-                 all_answers=None,
-                 start_position=None,
-                 end_position=None,
-                 switch=None):
-        self.qas_id = qas_id
-        self.question_text = question_text
-        self.doc_tokens = doc_tokens
-        self.paragraph_indices = paragraph_indices
-        self.orig_answer_text = orig_answer_text
-        self.all_answers=all_answers
-        self.start_position = start_position
-        self.end_position = end_position
-        self.switch = switch
-
-    def __str__(self):
-        return self.__repr__()
-
-    def __repr__(self):
-        s = "question: "+self.question_text
-        return s
 
 
 class ContextFeatures(object):
@@ -114,7 +82,6 @@ class ContextFeatures(object):
                  segment_ids=None, # Deprecated due to context/question split
                  start_position=None,
                  end_position=None,
-                 switch=None,
                  answer_mask=None,
                  doc_tokens=None):
         self.unique_id = unique_id
@@ -128,7 +95,6 @@ class ContextFeatures(object):
         self.segment_ids = segment_ids
         self.start_position = start_position
         self.end_position = end_position
-        self.switch = switch
         self.answer_mask = answer_mask
         self.paragraph_index = paragraph_index
         self.doc_tokens = doc_tokens
@@ -164,7 +130,7 @@ class TfidfFeatures(object):
 
 
 def read_squad_examples(input_file, return_answers, context_only=False, question_only=False,
-                        draft=False, draft_num_examples=12, append_title=False):
+                        draft=False, draft_num_examples=12):
     """Read a SQuAD json file into a list of SquadExample."""
     with open(input_file, "r") as reader:
         input_data = json.load(reader)["data"]
@@ -182,37 +148,17 @@ def read_squad_examples(input_file, return_answers, context_only=False, question
             # Do not load context for question only
             if not question_only:
                 paragraph_text = paragraph["context"]
-                title_offset = 0
-                if append_title:
-                    title_str = '[ ' + ' '.join(title.split('_')) + ' ] '
-                    title_offset += len(title_str)
-                    paragraph_text = title_str + paragraph_text
                 # Note that we use the term 'word' for whitespace based words, and 'token' for subtokens (for BERT input)
                 doc_words, char_to_word_offset = context_to_words_and_offset(paragraph_text)
 
             # 1) Context only ends here
             if context_only:
-                metadata = {}
-                if "pubmed_id" in entry:
-                    entry_keys = [
-                        "pubmed_id", "sha", "title_original", "title_entities",
-                        "journal", "authors", "article_idx"
-                    ]
-                    para_keys = ["context_entities"]
-                    for entry_key in entry_keys:
-                        if entry_key in entry:
-                            metadata[entry_key] = entry[entry_key]
-                    for para_key in para_keys:
-                        if para_key in paragraph:
-                            metadata[para_key] = paragraph[para_key]
-                    # metadata["pubmed_id"] = (metadata["pubmed_id"] if not pd.isnull(metadata["pubmed_id"])
-                    #     else 'NaN')
                 example = SquadExample(
                     doc_words=doc_words,
                     title=title,
                     doc_idx=doc_idx,
-                    par_idx=par_idx,
-                    metadata=metadata)
+                    par_idx=par_idx
+                )
                 examples.append(example)
 
                 if draft and len(examples) == draft_num_examples:
@@ -255,7 +201,7 @@ def read_squad_examples(input_file, return_answers, context_only=False, question
                             ans_cnt += 1
 
                             orig_answer_text = answer["text"]
-                            answer_offset = answer["answer_start"] + title_offset
+                            answer_offset = answer["answer_start"]
                             answer_length = len(orig_answer_text)
                             start_position = char_to_word_offset[answer_offset]
                             end_position = char_to_word_offset[answer_offset + answer_length - 1]
@@ -543,14 +489,14 @@ def convert_questions_to_features(examples, tokenizer, max_query_length=None):
             assert len(input_mask_) == max_query_length + 2
 
             if example_index < 1:
-                # logger.info("*** Example ***")
-                # logger.info("unique_id: %s" % (unique_id))
-                # logger.info("example_index: %s" % (example_index))
+                logger.info("*** Example ***")
+                logger.info("unique_id: %s" % (unique_id))
+                logger.info("example_index: %s" % (example_index))
                 logger.info("tokens: %s" % " ".join(
                     [tokenization.printable_text(x) for x in query_tokens]))
-                # logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids_]))
-                # logger.info(
-                #     "input_mask: %s" % " ".join([str(x) for x in input_mask_]))
+                logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids_]))
+                logger.info(
+                    "input_mask: %s" % " ".join([str(x) for x in input_mask_]))
 
             question_features.append(
                 QuestionFeatures(
@@ -810,13 +756,9 @@ def sample_similar_questions(examples, features, question_emb_file, cuda=False):
         return sampled_features
 
 
-def compute_tfidf(train_examples, pos_features, neg_features, q_features, data_dir=None):
-    # Load DrQA
-    from drqa.retriever import TfidfDocRanker
-    ranker = TfidfDocRanker(
-        # '%s/wikipedia/docs-tfidf-ngram=2-hash=16777216-tokenizer=simple.npz'%data_dir,
-        'dump/KR94373_piqa-nfs_1173_BioASQ/BioASQ-tfidf-ngram=2-hash=16777216-tokenizer=simple.npz',
-        strict=False)
+def compute_tfidf(train_examples, pos_features, neg_features, q_features, data_dir=None, tfidf_path=None):
+    # Load doc ranker
+    ranker = TfidfDocRanker(tfidf_path=tfidf_path, strict=False)
     qpar_cache = {} # used for tfidf score cache
 
     # Iterate each feature and compute pos/neg scores
@@ -860,166 +802,3 @@ def compute_tfidf(train_examples, pos_features, neg_features, q_features, data_d
         )
 
     return tfidf_features
-
-
-def convert_idxs_to_features(save_idx_path, phrase_dump_dir, examples):
-    # Read save_idxs
-    with open(save_idx_path, 'r') as f:
-        save_idxs = json.load(f)
-    print("Load save_idxs", len(save_idxs['doc'][0]), len(save_idxs['start'][0]), len(save_idxs['qid']))
-
-    # Make qid to ex_id
-    qid2exid = {ex.qas_id: exid for exid, ex in enumerate(examples)}
-
-    # For getting docs
-    def get_doc_group(_phrase_dumps, doc_idx, _dump_ranges=None):
-        if len(_phrase_dumps) == 1:
-            return _phrase_dumps[0][str(doc_idx)]
-        for dump_range, dump in zip(_dump_ranges, _phrase_dumps):
-            if dump_range[0] * 1000 <= int(doc_idx) < dump_range[1] * 1000:
-                if str(doc_idx) not in dump:
-                    raise ValueError('%d not found in dump list' % int(doc_idx))
-                return dump[str(doc_idx)]
-        raise ValueError('%d not found in dump list' % int(doc_idx))
-
-    # For dequant
-    def int8_to_float(num, offset, factor, keep_zeros=False):
-        if not keep_zeros:
-            return num.astype(np.float32) / factor + offset
-        else:
-            return (num.astype(np.float32) / factor + offset) * (num != 0.0).astype(np.float32)
-
-    # Load phrases
-    if os.path.isdir(phrase_dump_dir):
-        phrase_dump_paths = sorted(
-            [os.path.join(phrase_dump_dir, name) for name in os.listdir(phrase_dump_dir) if 'hdf5' in name])
-        dump_names = [os.path.splitext(os.path.basename(path))[0] for path in phrase_dump_paths]
-        dump_ranges = [list(map(int, name.split('-'))) for name in dump_names]
-    else:
-        phrase_dump_paths = [phrase_dump_dir]
-    phrase_dumps = [h5py.File(path, 'r') for path in phrase_dump_paths]
-    print("Load phrase dumps", phrase_dump_paths)
-
-    # Load start vectors/strings from the dump
-    new_examples = []
-    phrase_inputs = []
-    phrase_input_ids = []
-    phrase_input_uni = []
-    phrase_input_bi = []
-    phrase_input_tri = []
-    phrase_targets = []
-    found = 0
-    max_len = 382
-    for qid, doc_idxs, start_idxs in tqdm(zip(save_idxs['qid'], save_idxs['doc'], save_idxs['start']),
-                                          total=len(save_idxs['start'])):
-        if qid not in qid2exid: continue # For debugging
-        start_vecs = []
-        start_texts = []
-        sparse_id = []
-        sparse_uni = []
-        sparse_bi = []
-        sparse_tri = []
-
-        # TODO: Make it faster or reduce it to top 100
-        # Get phrase/text info from doc/start idx
-        for doc_idx, start_idx in zip(doc_idxs, start_idxs):
-            group = get_doc_group(phrase_dumps, doc_idx)
-            start_vecs.append(group['start'][start_idx,:])
-            start_char = group['word2char_start'][group['f2o_start'][start_idx]]
-            start_texts.append(group.attrs['context'][start_char:])
-
-            # Get uni, bi, trigram values
-            sparse_ids = group['input_ids'][:]
-            sparse_vals = group['sparse'][:, :]
-            sparse_bi_vals = None
-            if 'sparse_bi' in group:
-                sparse_bi_vals = group['sparse_bi'][:, :]
-            sparse_tri_vals = None
-            if 'sparse_tri' in group:
-                sparse_tri_vals = group['sparse_tri'][:, :]
-            para_lens = group['len_per_para'][:]
-            if 'f2o_start' in group:
-                f2o_start = group['f2o_start'][:]
-            else:
-                f2o_start = list(range(group['start'].shape[0]))
-
-            # Calculate paragraph start end location in sparse vector
-            para_bounds = [(sum(para_lens[:para_idx]), sum(para_lens[:para_idx+1])) for
-                para_idx in range(len(para_lens))]
-            para_idx = 0
-            for se in para_bounds:
-                if f2o_start[start_idx] >= se[0] and f2o_start[start_idx] < se[1]:
-                    break
-                else:
-                    para_idx += 1
-            para_startend = para_bounds[para_idx]
-            # max_len = max_len if max_len > para_startend[1] - para_startend[0] else para_startend[1] - para_startend[0]
-
-            # Get exact sparse vals using parabounds and start_idx
-            sparse_ids_uni = sparse_ids[para_startend[0]:para_startend[1]]
-            sparse_id.append(sparse_ids_uni)
-            # TODO: need to check whether keep_zeros is True
-            sparse_data_uni = int8_to_float(sparse_vals[start_idx,:para_startend[1]-para_startend[0]],
-                    group.attrs['sparse_offset'], group.attrs['sparse_scale'], keep_zeros=True)
-            sparse_uni.append(sparse_data_uni)
-            if sparse_bi_vals is not None:
-                sparse_data_bi = int8_to_float(sparse_bi_vals[start_idx,:para_startend[1]-para_startend[0]-1],
-                        group.attrs['sparse_offset'], group.attrs['sparse_scale'], keep_zeros=True)
-                sparse_bi.append(sparse_data_bi)
-            if sparse_tri_vals is not None:
-                sparse_data_tri = int8_to_float(sparse_tri_vals[start_idx,:para_startend[1]-para_startend[0]-2],
-                        group.attrs['sparse_offset'], group.attrs['sparse_scale'], keep_zeros=True)
-                sparse_tri.append(sparse_data_tri)
-
-            # Only top 100
-            if len(start_texts) == 100:
-                break
-
-        # PAD
-        for item_idx in range(len(sparse_id)):
-            sparse_id[item_idx] = sparse_id[item_idx].tolist() + [0] * (max_len - len(sparse_id[item_idx]))
-            sparse_uni[item_idx] = sparse_uni[item_idx].tolist() + [0] * (max_len - len(sparse_uni[item_idx]))
-            if len(sparse_bi) > 0:
-                sparse_bi[item_idx] = sparse_bi[item_idx].tolist() + [0] * (max_len - len(sparse_bi[item_idx]))
-            if len(sparse_tri) > 0:
-                sparse_tri[item_idx] = sparse_tri[item_idx].tolist() + [0] * (max_len - len(sparse_tri[item_idx]))
-
-        sparse_id = np.stack(sparse_id)
-        sparse_uni = np.stack(sparse_uni)
-        if len(sparse_bi) > 0:
-            sparse_bi = np.stack(sparse_bi)
-        if len(sparse_tri) > 0:
-            sparse_tri = np.stack(sparse_tri)
-
-        # Distant supervision based on string match
-        target = np.array([start_text.startswith(examples[qid2exid[qid]].orig_answer_text) for start_text in start_texts])
-        if any(target):
-            found += 1
-
-            # phrase_target = np.argwhere(target > 0).flatten()
-            # assert len(phrase_target) > 0
-            # phrase_targets.append(phrase_target)
-            # if len(phrase_target) < 0: # Debugger
-            if False:
-                print(phrase_target)
-                print([a[:200] for a in np.array(start_texts)[phrase_target]])
-                print(examples[qid2exid[qid]].question_text)
-                print(examples[qid2exid[qid]].orig_answer_text)
-                print()
-        else:
-            # Discard examples with no answer
-            continue
-        new_examples.append(examples[qid2exid[qid]])
-        phrase_inputs.append(np.stack(start_vecs))
-        phrase_input_ids.append(sparse_id)
-        phrase_input_uni.append(sparse_uni)
-        phrase_input_bi.append(sparse_bi)
-        phrase_input_tri.append(sparse_tri)
-        phrase_targets.append(target)
-        # phrase_targets.append(np.argwhere(target==1)[0])
-    print('%d/%d (%.2f%%) found'% (found, len(qid2exid), found/len(qid2exid)*100))
-
-    return (new_examples, phrase_inputs, phrase_input_ids, phrase_input_uni, phrase_input_bi, phrase_input_tri,
-            phrase_targets)
-
-

@@ -8,6 +8,9 @@ import math
 import pandas as pd
 import numpy as np
 import six
+import h5py
+from multiprocessing import Process
+from time import time
 from scipy.sparse import csr_matrix, save_npz, hstack, vstack
 from termcolor import colored, cprint
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
@@ -141,7 +144,6 @@ def get_metadata(id2example, features, results, max_answer_length, do_lower_case
             sparse_tri_features = [result.start_sp['3'][1:len(feature.tokens)-1, 1:len(feature.tokens)-1]
                                for feature, result in zip(features, results)]
 
-        # TODO: Fix here as there could be no '1'
         map_size = max([k.shape[0] for k in sparse_features])
         sparse_map = np.zeros((input_ids.shape[0], map_size), dtype=np.float32)
         if sparse_bi_features is not None:
@@ -216,65 +218,13 @@ def get_metadata(id2example, features, results, max_answer_length, do_lower_case
                 'sparse': sparse_map, 'sparse_bi': sparse_bi_map, 'sparse_tri': sparse_tri_map,
                 'len_per_para': len_per_para}
 
-    '''
-    # For analysis
-    # if 'never' in features[0].tokens or 'example' in features[0].tokens or 'not' in features[0].tokens:
-    # if 'message includes a budget message and an economic' in full_text:
-    if False:
-        start_index = [118]
-        par_index = 0
-        for vidx, (v1, v2) in enumerate(zip(features[par_index].tokens[1:-1],
-            results[par_index].start_sp['1'][start_index[0]+1][1:len(features[par_index].tokens)-1])):
-            # out_json.append((v1, v2))
-            if vidx in start_index:
-                cprint('{}({:.3f}, {})'.format(v1, v2, vidx), 'green', end=' ')
-                continue
-            if v2 > 1.0:
-                cprint('{}({:.3f}, {})'.format(v1, v2, vidx), 'red', end=' ')
-            else:
-                print('{}({:.3f}, {})'.format(v1, v2, vidx), end=' ')
-        print()
-
-        for vidx, (v1, v2) in enumerate(zip(features[par_index].tokens[1:-1],
-            results[par_index].start_sp['2'][start_index[0]+1][1:len(features[par_index].tokens)-1])):
-            # out_json.append((v1, v2))
-            if vidx in start_index:
-                cprint('{}({:.3f}, {})'.format(v1, v2, vidx), 'green', end=' ')
-                continue
-            if v2 > 1.0:
-                cprint('{}({:.3f}, {})'.format(v1, v2, vidx), 'red', end=' ')
-            else:
-                print('{}({:.3f}, {})'.format(v1, v2, vidx), end=' ')
-        print()
-
-        # DrQA analysis
-        tfidf_result = ranker.text2spvec(full_text.split('[PAR]')[par_index])
-        # tfidf_result = ranker.text2spvec(' '.join(features[par_index].tokens[1:-1]))
-        print(tfidf_result)
-        exit()
-
-    for vidx, (v1, v2) in enumerate(zip(features[0].tokens[1:-1],
-        results[0].start_sp['3'][1][1:len(features[0].tokens)-1])):
-        # out_json.append((v1, v2))
-        if vidx in start_index:
-            cprint('{}({:.3f})'.format(v1, v2), 'green', end=' ')
-            continue
-        if v2 > 0.1:
-            cprint('{}({:.3f})'.format(v1, v2), 'red', end=' ')
-        else:
-            print('{}({:.3f})'.format(v1, v2), end=' ')
-    exit()
-    '''
-
     return metadata
+
 
 def filter_metadata(metadata, threshold):
     start_idxs, = np.where(metadata['filter_start'] > threshold)
     end_idxs, = np.where(metadata['filter_end'] > threshold)
     end_long2short = {long: short for short, long in enumerate(end_idxs)}
-
-    # metadata['word2char_start'] = metadata['word2char_start'][start_idxs]
-    # metadata['word2char_end'] = metadata['word2char_end'][end_idxs]
     metadata['start'] = metadata['start'][start_idxs]
     metadata['end'] = metadata['end'][end_idxs]
     metadata['sparse'] = metadata['sparse'][start_idxs]
@@ -296,46 +246,10 @@ def filter_metadata(metadata, threshold):
 def compress_metadata(metadata, dense_offset, dense_scale, sparse_offset, sparse_scale):
     for key in ['start', 'end']:
         if key in metadata:
-            '''
-            if key == 'start':
-                for meta in metadata[key]:
-                    for number in meta:
-                        num_str = "%.1f" % number
-                        if float(num_str) not in b_quant_stat:
-                            b_quant_stat[float(num_str)] = 0
-                        b_quant_stat[float(num_str)] += 1
-            '''
             metadata[key] = float_to_int8(metadata[key], dense_offset, dense_scale)
-            '''
-            if key == 'start':
-                for meta in metadata[key]:
-                    for number in meta:
-                        num_str = "%d" % number
-                        if int(num_str) not in quant_stat:
-                            quant_stat[int(num_str)] = 0
-                        quant_stat[int(num_str)] += 1
-            '''
     for key in ['sparse', 'sparse_bi', 'sparse_tri']:
         if key in metadata and metadata[key] is not None:
-            '''
-            if key == 'sparse':
-                for meta in metadata[key]:
-                    for number in meta:
-                        num_str = "%.1f" % number
-                        if float(num_str) not in b_quant_stat:
-                            b_quant_stat[float(num_str)] = 0
-                        b_quant_stat[float(num_str)] += 1
-            '''
             metadata[key] = float_to_int8(metadata[key], sparse_offset, sparse_scale)
-            '''
-            if key == 'sparse':
-                for meta in metadata[key]:
-                    for number in meta:
-                        num_str = "%d" % number
-                        if int(num_str) not in quant_stat:
-                            quant_stat[int(num_str)] = 0
-                        quant_stat[int(num_str)] += 1
-            '''
     return metadata
 
 
@@ -350,43 +264,8 @@ def write_hdf5(all_examples, all_features, all_results,
                dense_offset=None, dense_scale=None, sparse_offset=None, sparse_scale=None, use_sparse=False):
     assert len(all_examples) > 0
 
-    import h5py
-    from multiprocessing import Process
-    from time import time
-
     id2feature = {feature.unique_id: feature for feature in all_features}
     id2example = {id_: all_examples[id2feature[id_].example_index] for id_ in id2feature}
-
-    '''
-    from drqa import retriever
-    from drqa.retriever import utils
-
-    global ranker
-    RANKER_PATH = '/home/jinhyuk/github/drqa/data/wikipedia/docs-tfidf-ngram=2-hash=16777216-tokenizer=simple.npz'
-    ranker = MyTfidfDocRanker(
-        tfidf_path=RANKER_PATH,
-        strict=False
-    )
-    '''
-
-    # Deprecated?
-    def add_(inqueue_, outqueue_):
-        with ThreadPool(2) as pool:
-            items = []
-            for item in iter(inqueue_.get, None):
-                args = list(item[:3]) + [max_answer_length, do_lower_case, verbose_logging] + [item[3],
-                                                                                               filter_threshold]
-                items.append(args)
-                if len(items) < 16:
-                    continue
-                out = pool.map(pool_func, items)
-                map(outqueue_.put, out)
-                items = []
-
-            out = pool.map(pool_func, items)
-            map(outqueue_.put, out)
-
-            outqueue_.put(None)
 
     def add(inqueue_, outqueue_):
         for item in iter(inqueue_.get, None):
@@ -395,26 +274,6 @@ def write_hdf5(all_examples, all_features, all_results,
             outqueue_.put(out)
 
         outqueue_.put(None)
-
-    # Deprecated
-    def recursively_save_dict_contents_to_group(h5file, path, dic):
-        for key, item in dic.items():
-            if item is None:
-                return
-            if type(item) == int:
-                item = np.int64(item)
-            if type(item) == bool:
-                item = 'true' if item else 'false'
-            if isinstance(item, (np.ndarray, np.int64, np.float64, str, bytes)):
-                h5file.create_dataset(path + key, data=item)
-            elif isinstance(item, dict):
-                recursively_save_dict_contents_to_group(h5file, path+key+'/', item)
-            elif type(item) == list:
-                recursively_save_dict_contents_to_group(h5file, path+key+'/', {str(kk): tt for kk, tt in enumerate(item)})
-            elif pd.isnull(item):
-                h5file.create_dataset(path + key, data='NaN')
-            else:
-                raise ValueError('Cannot save %s type %s'%(type(item), item))
 
     def write(outqueue_):
         with h5py.File(hdf5_path) as f:
@@ -451,7 +310,6 @@ def write_hdf5(all_examples, all_features, all_results,
                     dg.create_dataset('word2char_end', data=metadata['word2char_end'])
                     dg.create_dataset('f2o_start', data=metadata['f2o_start'])
                     dg.create_dataset('f2o_end', data=metadata['f2o_end'])
-                    # recursively_save_dict_contents_to_group(dg, 'metadata/', metadata['metadata'])
 
                 else:
                     break
@@ -518,8 +376,6 @@ def write_predictions(all_examples, all_features, all_results,
         id_ = example.qas_id
 
         # Initial setting
-        # predictions[id_] = ''
-        # scores[id_] = -1e9
         token_count += len(feature.tokens)
 
         for start_index in range(len(feature.tokens)):
@@ -585,9 +441,7 @@ def get_question_results(question_examples, query_eval_features, question_datalo
             end = batch_end[i].detach().cpu().numpy().astype(np.float16)
             sparse = None
             if len(batch_sps) > 0:
-                # sparse = batch_sps[i].detach().cpu().numpy().astype(np.float16)
                 sparse = {ng: bb_ssp[i].detach().cpu().numpy().astype(np.float16) for ng, bb_ssp in batch_sps.items()}
-            # span_logit = batch_span_logits[i].detach().cpu().numpy().astype(np.float16)
             query_eval_feature = query_eval_features[example_index.item()]
             unique_id = int(query_eval_feature.unique_id)
             qas_id = id2example[unique_id].qas_id
@@ -599,91 +453,11 @@ def get_question_results(question_examples, query_eval_features, question_datalo
 
 
 def write_question_results(question_results, question_features, path):
-    import h5py
-    '''
-    global ranker
-    RANKER_PATH = '/home/jinhyuk/github/drqa/data/wikipedia/docs-tfidf.npz'
-    ranker = MyTfidfDocRanker(
-        tfidf_path=RANKER_PATH,
-        strict=False
-    )
-    '''
     with h5py.File(path, 'w') as f:
         for question_result, question_feature in tqdm(zip(question_results, question_features)):
-            '''
-            if '56d9c92bdc89441400fdb80e' in question_result.qas_id:
-                tfidf_result = ranker.text2spvec(' '.join(question_feature.tokens_)[1:-1])
-                print(tfidf_result)
-                exit()
-            else:
-                print('pass', question_result.qas_id)
-                continue
-            '''
-            sparse = None
-            sparse_bi = None
-            sparse_tri = None
-            input_ids = None
-            if question_result.sparse is not None:
-                sparse = question_result.sparse['1'][1:len(question_feature.tokens_) - 1]
-                if '2' in question_result.sparse:
-                    sparse_bi = question_result.sparse['2'][1:len(question_feature.tokens_) - 1]
-                if '3' in question_result.sparse:
-                    sparse_tri = question_result.sparse['3'][1:len(question_feature.tokens_) - 1]
-
-                input_ids = question_feature.input_ids[1:len(question_feature.tokens_) - 1]
-
             dummy_ones = np.ones((question_result.start.shape[0], 1))
             data = np.concatenate([question_result.start, question_result.end, dummy_ones], -1)
             f.create_dataset(question_result.qas_id, data=data)
-            # print(question_result.qas_id, input_ids, data[0,:10])
-
-            if False:
-            # if sparse is not None:
-                # print([(tok, val) for tok, val in zip(question_feature.tokens_[1:-1], sparse)])
-                # print([(tok, val) for tok, val in zip(question_feature.tokens_[1:-1], sparse_bi)])
-                # print([(tok, val) for tok, val in zip(question_feature.tokens_[1:-1], sparse_tri)])
-                # print()
-                '''
-                start_index = []
-                for vidx, (v1, v2) in enumerate(zip(question_feature.tokens_[1:-1], sparse)):
-                    # out_json.append((v1, v2))
-                    if vidx in start_index:
-                        cprint('{}({:.3f})'.format(v1, v2), 'green', end=' ')
-                        continue
-                    if v2 > 1.0:
-                        cprint('{}({:.3f})'.format(v1, v2), 'red', end=' ')
-                    else:
-                        print('{}({:.3f})'.format(v1, v2), end=' ')
-                print()
-                for vidx, (v1, v2) in enumerate(zip(question_feature.tokens_[1:-1], sparse_bi)):
-                    # out_json.append((v1, v2))
-                    if vidx in start_index:
-                        cprint('{}({:.3f})'.format(v1, v2), 'green', end=' ')
-                        continue
-                    if v2 > 1.0:
-                        cprint('{}({:.3f})'.format(v1, v2), 'red', end=' ')
-                    else:
-                        print('{}({:.3f})'.format(v1, v2), end=' ')
-                print()
-                print()
-                for vidx, (v1, v2) in enumerate(zip(question_feature.tokens_[1:-1], sparse_tri)):
-                    # out_json.append((v1, v2))
-                    if vidx in start_index:
-                        cprint('{}({:.3f})'.format(v1, v2), 'green', end=' ')
-                        continue
-                    if v2 > 0.1:
-                        cprint('{}({:.3f})'.format(v1, v2), 'red', end=' ')
-                    else:
-                        print('{}({:.3f})'.format(v1, v2), end=' ')
-                print()
-                exit()
-                '''
-                f.create_dataset(question_result.qas_id + '_sparse', data=sparse)
-                if sparse_bi is not None:
-                    f.create_dataset(question_result.qas_id + '_sparse_bi', data=sparse_bi)
-                if sparse_tri is not None:
-                    f.create_dataset(question_result.qas_id + '_sparse_tri', data=sparse_tri)
-                f.create_dataset(question_result.qas_id + '_input_ids', data=input_ids)
 
 
 def convert_question_features_to_dataloader(query_eval_features, fp16, local_rank, predict_batch_size):
@@ -837,308 +611,4 @@ def int8_to_float(num, offset, factor, keep_zeros=False):
         return num.astype(np.float32) / factor + offset
     else:
         return (num.astype(np.float32) / factor + offset) * (num != 0.0).astype(np.float32)
-
-
-def write_predictions_nq(logger, all_examples, all_features, all_results, n_best_size,
-                      do_lower_case, output_prediction_file,
-                      output_nbest_file, verbose_logging,
-                      write_prediction=True, n_paragraphs=None):
-
-    """Write final predictions to the json file."""
-
-    example_index_to_features = collections.defaultdict(list)
-    for feature in all_features:
-        example_index_to_features[feature.example_index].append(feature)
-
-    unique_id_to_result = {}
-    for result in all_results:
-        unique_id_to_result[result.unique_id] = result
-
-    _PrelimPrediction = collections.namedtuple(  # pylint: disable=invalid-name
-       "PrelimPrediction",
-       ["paragraph_index", "feature_index", "start_index", "end_index", "logit", "no_answer_logit"])
-
-    all_predictions = collections.OrderedDict()
-    all_nbest_json = collections.OrderedDict()
-
-    if verbose_logging:
-        all_examples = tqdm(enumerate(all_examples))
-    else:
-        all_examples = enumerate(all_examples)
-
-    for (example_index, example) in all_examples:
-        features = example_index_to_features[example_index]
-        if len(features)==0 and n_paragraphs is None:
-            pred = _NbestPrediction(
-                        text="empty",
-                        logit=-1000,
-                        no_answer_logit=1000)
-            all_predictions[example.qas_id] = ("empty", example.all_answers)
-            all_nbest_json[example.qas_id] = [pred]
-            continue
-
-        prelim_predictions = []
-        yn_predictions = []
-
-        if n_paragraphs is None:
-            results = sorted(enumerate(features),
-                         key=lambda f: unique_id_to_result[f[1].unique_id].switch[3])[:1]
-        else:
-            results = enumerate(features)
-        for (feature_index, feature) in results:
-            result = unique_id_to_result[feature.unique_id]
-            scores = []
-            start_logits = result.start_logits[:len(feature.tokens)]
-            end_logits = result.end_logits[:len(feature.tokens)]
-            for (i, s) in enumerate(start_logits):
-                for (j, e) in enumerate(end_logits[i:i+10]):
-                    scores.append(((i, i+j), s+e))
-
-            scores = sorted(scores, key=lambda x: x[1], reverse=True)
-
-            cnt = 0
-            for (start_index, end_index), score in scores:
-                if start_index >= len(feature.tokens):
-                    continue
-                if end_index >= len(feature.tokens):
-                    continue
-                if start_index not in feature.token_to_word_map:
-                    continue
-                if end_index not in feature.token_to_word_map:
-                    continue
-                if not feature.token_is_max_context.get(start_index, False):
-                    continue
-                if end_index < start_index:
-                    continue
-                prelim_predictions.append(
-                   _PrelimPrediction(
-                       paragraph_index=feature.paragraph_index,
-                       feature_index=feature_index,
-                       start_index=start_index,
-                       end_index=end_index,
-                       logit=-result.switch[3], #score,
-                       no_answer_logit=result.switch[3]))
-                if n_paragraphs is None:
-                    if write_predictions and len(prelim_predictions)>=n_best_size:
-                        break
-                    elif not write_predictions:
-                        break
-                cnt += 1
-
-        prelim_predictions = sorted(
-                prelim_predictions,
-                key=lambda x: x.logit,
-                reverse=True)
-        no_answer_logit = result.switch[3]
-
-        def get_nbest_json(prelim_predictions):
-
-            seen_predictions = {}
-            nbest = []
-            for pred in prelim_predictions:
-                if len(nbest) >= n_best_size:
-                    break
-
-                if pred.start_index == pred.end_index == -1:
-                    final_text = "yes"
-                elif pred.start_index == pred.end_index == -2:
-                    final_text = "no"
-                else:
-                    feature = features[pred.feature_index]
-
-                    tok_tokens = feature.tokens[pred.start_index:(pred.end_index + 1)]
-                    orig_doc_start = feature.token_to_word_map[pred.start_index]
-                    orig_doc_end = feature.token_to_word_map[pred.end_index]
-                    orig_tokens = feature.doc_tokens[orig_doc_start:(orig_doc_end + 1)]
-                    tok_text = " ".join(tok_tokens)
-
-                    # De-tokenize WordPieces that have been split off.
-                    tok_text = tok_text.replace(" ##", "")
-                    tok_text = tok_text.replace("##", "")
-
-                    # Clean whitespace
-                    tok_text = tok_text.strip()
-                    tok_text = " ".join(tok_text.split())
-                    orig_text = " ".join(orig_tokens)
-
-                    final_text = nq_get_final_text(tok_text, orig_text, do_lower_case, \
-                                                   logger, verbose_logging)
-
-
-                if final_text in seen_predictions:
-                    continue
-
-                nbest.append(
-                    _NbestPrediction(
-                        text=final_text,
-                        logit=pred.logit,
-                        no_answer_logit=no_answer_logit))
-
-            # In very rare edge cases we could have no valid predictions. So we
-            # just create a nonce prediction in this case to avoid failure.
-            if not nbest:
-                nbest.append(
-                _NbestPrediction(text="empty", logit=0.0, no_answer_logit=no_answer_logit))
-
-            assert len(nbest) >= 1
-
-            total_scores = []
-            for entry in nbest:
-                total_scores.append(entry.logit)
-
-            probs = _compute_softmax(total_scores)
-            nbest_json = []
-            for (i, entry) in enumerate(nbest):
-                output = collections.OrderedDict()
-                output['text'] = entry.text
-                output['probability'] = probs[i]
-                output['logit'] = entry.logit
-                output['no_answer_logit'] = entry.no_answer_logit
-                nbest_json.append(output)
-
-            assert len(nbest_json) >= 1
-            return nbest_json
-        if n_paragraphs is None:
-            nbest_json = get_nbest_json(prelim_predictions)
-            all_predictions[example.qas_id] = (nbest_json[0]["text"], example.all_answers)
-            all_nbest_json[example.qas_id] = nbest_json
-        else:
-            all_predictions[example.qas_id] = []
-            all_nbest_json[example.qas_id] = []
-            for n in n_paragraphs:
-                nbest_json = get_nbest_json([pred for pred in prelim_predictions if \
-                                             pred.paragraph_index<n])
-                all_predictions[example.qas_id].append(nbest_json[0]["text"])
-
-    if write_prediction:
-        logger.info("Writing predictions to: %s" % (output_prediction_file))
-        logger.info("Writing nbest to: %s" % (output_nbest_file))
-
-        with open(output_prediction_file, "w") as writer:
-            writer.write(json.dumps(all_predictions, indent=4) + "\n")
-
-        with open(output_nbest_file, "w") as writer:
-            writer.write(json.dumps(all_nbest_json, indent=4) + "\n")
-
-    if n_paragraphs is None:
-        f1s, ems = [], []
-        for prediction, groundtruth in all_predictions.values():
-            if len(groundtruth)==0:
-                f1s.append(0)
-                ems.append(0)
-                continue
-            f1s.append(max([f1_score(prediction, gt)[0] for gt in groundtruth]))
-            ems.append(max([exact_match_score(prediction, gt) for gt in groundtruth]))
-        final_f1, final_em = np.mean(f1s), np.mean(ems)
-    else:
-        f1s, ems = [[] for _ in n_paragraphs], [[] for _ in n_paragraphs]
-        for predictions in all_predictions.values():
-            groundtruth = predictions[-1]
-            predictions = predictions[:-1]
-            if len(groundtruth)==0:
-                for i in range(len(n_paragraphs)):
-                    f1s[i].append(0)
-                    ems[i].append(0)
-                continue
-            for i, prediction in enumerate(predictions):
-                f1s[i].append(max([f1_score(prediction, gt)[0] for gt in groundtruth]))
-                ems[i].append(max([exact_match_score(prediction, gt) for gt in groundtruth]))
-        for n, f1s_, ems_ in zip(n_paragraphs, f1s, ems):
-            logger.info("n=%d\tF1 %.2f\tEM %.2f"%(n, np.mean(f1s_)*100, np.mean(ems_)*100))
-        final_f1, final_em = np.mean(f1s[-1]), np.mean(ems[-1])
-    return final_em, final_f1
-
-
-
-def _compute_softmax(scores):
-    """Compute softmax probability over raw logits."""
-    if not scores:
-        return []
-
-    max_score = None
-    for score in scores:
-        if max_score is None or score > max_score:
-            max_score = score
-
-    exp_scores = []
-    total_sum = 0.0
-    for score in scores:
-        x = math.exp(score - max_score)
-        exp_scores.append(x)
-        total_sum += x
-
-    probs = []
-    for score in exp_scores:
-        probs.append(score / total_sum)
-    return probs
-
-
-def nq_get_final_text(pred_text, orig_text, do_lower_case, logger, verbose_logging):
-    """Project the tokenized prediction back to the original text."""
-    def _strip_spaces(text):
-        ns_chars = []
-        ns_to_s_map = collections.OrderedDict()
-        for (i, c) in enumerate(text):
-            if c == " ":
-                continue
-            ns_to_s_map[len(ns_chars)] = i
-            ns_chars.append(c)
-        ns_text = "".join(ns_chars)
-        return (ns_text, ns_to_s_map)
-
-    # We first tokenize `orig_text`, strip whitespace from the result
-    # and `pred_text`, and check if they are the same length. If they are
-    # NOT the same length, the heuristic has failed. If they are the same
-    # length, we assume the characters are one-to-one aligned.
-    tokenizer = tokenization.BasicTokenizer(do_lower_case=do_lower_case)
-
-    tok_text = " ".join(tokenizer.tokenize(orig_text))
-
-    start_position = tok_text.find(pred_text)
-    if start_position == -1:
-        if verbose_logging:
-            logger.info(
-                "Unable to find text: '%s' in '%s'" % (pred_text, orig_text))
-        return orig_text
-    end_position = start_position + len(pred_text) - 1
-
-    (orig_ns_text, orig_ns_to_s_map) = _strip_spaces(orig_text)
-    (tok_ns_text, tok_ns_to_s_map) = _strip_spaces(tok_text)
-
-    if len(orig_ns_text) != len(tok_ns_text):
-        if verbose_logging:
-            logger.info("Length not equal after stripping spaces: '%s' vs '%s'",
-                            orig_ns_text, tok_ns_text)
-        return orig_text
-
-    # We then project the characters in `pred_text` back to `orig_text` using
-    # the character-to-character alignment.
-    tok_s_to_ns_map = {}
-    for (i, tok_index) in six.iteritems(tok_ns_to_s_map):
-        tok_s_to_ns_map[tok_index] = i
-
-    orig_start_position = None
-    if start_position in tok_s_to_ns_map:
-        ns_start_position = tok_s_to_ns_map[start_position]
-        if ns_start_position in orig_ns_to_s_map:
-            orig_start_position = orig_ns_to_s_map[ns_start_position]
-
-    if orig_start_position is None:
-        if verbose_logging:
-            logger.info("Couldn't map start position")
-        return orig_text
-
-    orig_end_position = None
-    if end_position in tok_s_to_ns_map:
-        ns_end_position = tok_s_to_ns_map[end_position]
-        if ns_end_position in orig_ns_to_s_map:
-            orig_end_position = orig_ns_to_s_map[ns_end_position]
-
-    if orig_end_position is None:
-        if verbose_logging:
-            logger.info("Couldn't map end position")
-        return orig_text
-
-    output_text = orig_text[orig_start_position:(orig_end_position + 1)]
-    return output_text
 

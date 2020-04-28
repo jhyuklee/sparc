@@ -25,7 +25,6 @@ import six
 import torch
 import numpy as np
 import torch.nn as nn
-from modeling_biobert import BertModel as BioBertModel
 from torch.nn import CrossEntropyLoss
 from torch.nn.functional import binary_cross_entropy_with_logits, embedding, softmax
 
@@ -640,27 +639,23 @@ class BertForSQuAD2(nn.Module):
             return start_logits, end_logits, probs
 
 
-class BertForPIQA(nn.Module):
+class DenSPI(nn.Module):
     def __init__(self, config,
                  span_vec_size=64,
                  context_layer_idx=-1,
                  question_layer_idx=-1,
                  sparse_ngrams=['1', '2'],
-                 use_sparse=False,
-                 use_biobert=False,
+                 use_sparse=True,
                  neg_with_tfidf=False,
                  do_train_filter=False,
                  min_word_id=999):
-        super(BertForPIQA, self).__init__()
+        super(DenSPI, self).__init__()
 
         # Dense modules
-        if not use_biobert:
-            self.bert = BertModel(config)
-        else:
-            self.bert = BioBertModel(config)
+        self.bert = BertModel(config)
         self.bert_q = self.bert
 
-        # Sparse modules
+        # Sparse modules (CoSpR)
         self.sparse_start = nn.ModuleDict({
             key: SparseAttention(config, num_sparse_heads=1)
             for key in sparse_ngrams
@@ -684,7 +679,6 @@ class BertForPIQA(nn.Module):
         self.question_layer_idx = question_layer_idx
         self.do_train_filter = do_train_filter
         self.use_sparse = use_sparse
-        self.use_biobert = use_biobert
         self.sparse_ngrams = sparse_ngrams
         self.sigmoid = nn.Sigmoid()
         self.neg_with_tfidf = neg_with_tfidf
@@ -695,12 +689,8 @@ class BertForPIQA(nn.Module):
                 # cf https://github.com/pytorch/pytorch/pull/5617
                 module.weight.data.normal_(mean=0.0, std=config.initializer_range)
             elif isinstance(module, BERTLayerNorm):
-                if not self.use_biobert:
-                    module.beta.data.normal_(mean=0.0, std=config.initializer_range)
-                    module.gamma.data.normal_(mean=0.0, std=config.initializer_range)
-                else:
-                    module.bias.data.normal_(mean=0.0, std=config.initializer_range)
-                    module.weight.data.normal_(mean=0.0, std=config.initializer_range)
+                module.beta.data.normal_(mean=0.0, std=config.initializer_range)
+                module.gamma.data.normal_(mean=0.0, std=config.initializer_range)
             if isinstance(module, nn.Linear):
                 module.bias.data.zero_()
 
@@ -713,7 +703,7 @@ class BertForPIQA(nn.Module):
         if input_ids is not None:
             bs, seq_len = input_ids.size()
 
-            # For dense
+            # BERT reps
             context_layers, _ = self.bert(input_ids, None, input_mask)
             context_layer_all = context_layers[self.context_layer_idx]
 
@@ -727,14 +717,14 @@ class BertForPIQA(nn.Module):
                 input_ids = torch.cat([input_ids, neg_context_ids], 1)
                 bs, seq_len = input_ids.size()
 
-            # Calculate dense
+            # Calculate dense logits
             context_layer = context_layer_all[:, :, :-self.span_vec_size]
             span_layer = context_layer_all[:, :, -self.span_vec_size:]
             start, end, = context_layer.chunk(2, dim=2)
             span_start, span_end = span_layer.chunk(2, dim=2)
             span_logits = span_start.matmul(span_end.transpose(1, 2))
 
-            # Calculate sparse
+            # Calculate CoSpR
             start_sps = {}
             end_sps = {}
             sparse_mask = (input_ids >= self.min_word_id).float()
@@ -753,11 +743,6 @@ class BertForPIQA(nn.Module):
                 start_sps[ngram] = start_sps[ngram][:,:,0,:] * sparse_mask.unsqueeze(2) * input_diag.unsqueeze(0)
                 end_sps[ngram] = end_sps[ngram][:,:,0,:] * sparse_mask.unsqueeze(2) * input_diag.unsqueeze(0)
 
-            # print(start.min(), start.max(), end.min(), end.max())
-            # print(start_sps['1'].min(), start_sps['1'].max(), end_sps['1'].min(), end_sps['1'].max())
-            # print(start_sps['2'].min(), start_sps['2'].max(), end_sps['2'].min(), end_sps['2'].max())
-            # print(start_sps['3'].min(), start_sps['3'].max(), end_sps['3'].min(), end_sps['3'].max())
-
             # Filter calculation
             filter_start_logits, filter_end_logits = self.linear(context_layer_all).chunk(2, dim=2)
             filter_start_logits = filter_start_logits.squeeze(2)
@@ -768,12 +753,12 @@ class BertForPIQA(nn.Module):
                 return start, end, span_logits, filter_start_logits, filter_end_logits, start_sps, end_sps
 
         if query_ids is not None:
-            # For dense
+            # BERT reps
             question_layers, _ = self.bert_q(query_ids, None, query_mask)
             question_layer = question_layers[self.question_layer_idx][:, :, :-self.span_vec_size]
             query_start, query_end = question_layer[:, :1, :].chunk(2, dim=2)  # Just [CLS]
 
-            # For sparse
+            # For query-side CoSpR
             q_start_sps = {}
             q_end_sps = {}
             query_sparse_mask = ((query_ids >= self.min_word_id) & (query_ids != 1029)).float()
@@ -808,13 +793,12 @@ class BertForPIQA(nn.Module):
             sparse_mask_list = [sparse_mask]
             start_logits = start_logits.unsqueeze(1)
 
-            # Difficult to parallelize (but possible)
             for neg_idx, (_input_ids, _sparse_mask, _start_logits) in enumerate(
                     zip(input_ids_list, sparse_mask_list, start_logits.unbind(1))):
                 sp_start_logits = torch.zeros_like(_start_logits).to(_start_logits.device)
                 sp_end_logits = torch.zeros_like(_start_logits).to(_start_logits.device)
 
-                # logits for unigram sparse vec
+                # logits for unigram CoSpR
                 if '1' in self.sparse_ngrams:
                     mxq = (_input_ids.unsqueeze(2) == query_ids.unsqueeze(1)) * (
                         _sparse_mask.unsqueeze(2).byte() * query_sparse_mask.unsqueeze(1).byte())
@@ -826,7 +810,7 @@ class BertForPIQA(nn.Module):
                     sp_end_logits += (_end_sps.matmul(mxq.float()).matmul(
                         q_end_sps['1'].unsqueeze(2))).squeeze(2) * _sparse_mask
 
-                # logits for bigram sparse vec
+                # logits for bigram CoSpR
                 if '2' in self.sparse_ngrams:
                     bi_ids = torch.cat(
                         [_input_ids[:,:-1].unsqueeze(2), _input_ids[:,1:].unsqueeze(2)], 2
@@ -848,7 +832,7 @@ class BertForPIQA(nn.Module):
                     sp_end_logits[:,:-1] += (_end_sps[:,:-1,:-1].matmul(bi_mxq.float()).matmul(
                         q_end_sps['2'][:,:-1].unsqueeze(2))).squeeze(2) * bi_sparse_mask.float()
 
-                # logits for trigram sparse vec
+                # logits for trigram CoSpR
                 if '3' in self.sparse_ngrams:
                     tri_ids = torch.cat(
                             [_input_ids[:,:-2].unsqueeze(2), _input_ids[:,1:-1].unsqueeze(2),
@@ -888,7 +872,6 @@ class BertForPIQA(nn.Module):
         if start_positions is not None and end_positions is not None:
             if self.neg_with_tfidf:
                 full_dim = all_logits.size(-1)
-                # all_logits[:,:full_dim//2] += pos_score.unsqueeze(1).unsqueeze(1) * self.sigmoid(self.tfidf_weight)
                 all_logits[:,full_dim//2:] += neg_score.unsqueeze(1).unsqueeze(1) * self.sigmoid(self.tfidf_weight)
 
             # If we are on multi-GPU, split add a dimension
@@ -897,7 +880,6 @@ class BertForPIQA(nn.Module):
             if len(end_positions.size()) > 1 and end_positions.size(-1) == 1:
                 end_positions = end_positions.squeeze(-1)
             # sometimes the start/end positions are outside our model inputs, we ignore these terms
-            # ignored_index = all_logits.size(-1)
             ignored_index = seq_len
             span_ignored_index = ignored_index ** 2
             start_positions.clamp_(NO_ANS, seq_len)
@@ -906,8 +888,6 @@ class BertForPIQA(nn.Module):
                                                  ignore_index=seq_len, reduction='none')
             cel_2d = CrossEntropyLossWithDefault(default_value=self.default_value,
                                                  ignore_index=span_ignored_index, reduction='none')
-            # cel_1d = nn.CrossEntropyLoss(reduction='none')
-            # cel_2d = nn.CrossEntropyLoss(reduction='none')
             span_target = start_positions * ignored_index + end_positions
 
             # needed to handle -1
@@ -925,7 +905,6 @@ class BertForPIQA(nn.Module):
                 # Span prediction loss
                 true_loss = cel_2d(all_logits.view(all_logits.size(0), -1), span_target).mean()
                 d_true_loss = cel_2d(dense_logits.view(dense_logits.size(0), -1), span_target).mean()
-
             else:
                 raise NotImplementedError()
 
@@ -937,25 +916,7 @@ class BertForPIQA(nn.Module):
                 d_loss = d_true_loss + d_help_loss
                 loss = loss + d_loss
 
-            # Sparse only loss (Not used)
-            if False:
-                s_loss = s_true_loss + s_help_loss
-                loss = loss + s_loss
-
-            # Sparse regulaization term
-            sp_start_params = [p for ngram in self.sparse_ngrams for n, p in self.sparse_start[ngram].named_parameters()]
-            sp_end_params = [p for ngram in self.sparse_ngrams for n, p in self.sparse_end[ngram].named_parameters()]
-            sp_start_q_params = [p for ngram in self.sparse_ngrams
-                    for n, p in self.sparse_start_q[ngram].named_parameters()]
-            sp_end_q_params = [p for ngram in self.sparse_ngrams
-                    for n, p in self.sparse_end_q[ngram].named_parameters()]
-            sp_start_norm = sum([p.norm(2) for p in sp_start_params])
-            sp_end_norm = sum([p.norm(2) for p in sp_end_params])
-            sp_start_q_norm = sum([p.norm(2) for p in sp_start_q_params])
-            sp_end_q_norm = sum([p.norm(2) for p in sp_end_q_params])
-            l2_loss = (sp_start_norm + sp_end_norm + sp_start_q_norm + sp_end_q_norm) * 0.005
-            # loss = loss + l2_loss
-
+            # Filter loss
             filter_loss = None
             if self.do_train_filter:
                 length = torch.tensor(all_logits.size(-1)).to(start_logits.device)
@@ -989,68 +950,3 @@ class CrossEntropyLossWithDefault(nn.CrossEntropyLoss):
         assert new_target.min().item() >= 0, (new_target.min().item(), target.min().item())
         loss = super(CrossEntropyLossWithDefault, self).forward(new_input, new_target)
         return loss
-
-
-class MultiTargetCrossEntropyLoss(nn.Module):
-    def forward(self, input_, target, sub_target):
-        assert len(input_.size()) == 2
-        assert target.min().item() >= 0 # positive par should always have answers
-        all_target = torch.cat([target.unsqueeze(1), sub_target], dim=1) # Leaving no-answer bias left
-        input_ = torch.softmax(input_, dim=1)
-        new_input = input_.view(input_.size(0), all_target.size(1), -1) # Reshape for additional passages
-        assert all_target.min().item() >= -1, (all_target.min().item())
-
-        # Calculate multi-target loss
-        losses = []
-        for b_input, b_target in zip(torch.unbind(new_input), torch.unbind(all_target)):
-            masked_target = torch.masked_select(b_target, b_target.ge(NO_ANS+1)) # -1 means no answer, so we skip
-            masked_input = torch.masked_select(b_input, b_target.ge(NO_ANS+1).unsqueeze(1)).view(masked_target.size(0),-1)
-            merged_prob = torch.gather(masked_input, 1, masked_target.unsqueeze(1))
-            # merged_prob = torch.gather(b_input, 1, b_target.unsqueeze(1))
-            merged_prob = merged_prob.sum()
-            merged_prob.clamp_(1e-9, 1) # avoid inf loss
-            assert merged_prob <= 1 and merged_prob >= 0, merged_prob
-            b_loss = -torch.log(merged_prob.sum())
-            losses.append(b_loss)
-        loss = sum(losses) / len(losses)
-
-        return loss
-
-
-class MultiSpanCrossEntropyLoss(nn.Module):
-    def forward(self, input_, start_target, start_sub_target, end_target, end_sub_target):
-        assert len(input_.size()) == 2
-        assert start_target.min().item() >= 0 and end_target.min().item() >= 0
-        start_target = torch.cat([start_target.unsqueeze(1), start_sub_target], dim=1)
-        end_target = torch.cat([end_target.unsqueeze(1), end_sub_target], dim=1)
-        input_ = torch.softmax(input_, dim=1)
-        seq_len = int(math.sqrt(input_.size(1)))
-        assert start_target.min().item() >= -1, (start_target.min().item())
-
-        # Calculate multi-span loss
-        losses = []
-        for b_input, b_start_target, b_end_target in zip(
-                torch.unbind(input_), torch.unbind(start_target), torch.unbind(end_target)):
-            base = torch.arange(0, start_target.size(1)) * input_.size(-1) / start_target.size(-1)
-            span_target = base.to(input_.device) + b_start_target * seq_len + b_end_target
-            masked_target = torch.masked_select(span_target, b_start_target.ge(NO_ANS+1))
-            merged_prob = torch.gather(b_input, 0, masked_target)
-            # merged_prob = torch.gather(b_input, 0, span_target)
-            merged_prob = merged_prob.sum()
-            merged_prob.clamp_(1e-9, 1) # avoid inf loss
-            assert merged_prob <= 1 and merged_prob >= 0, merged_prob
-            b_loss = -torch.log(merged_prob.sum())
-            losses.append(b_loss)
-        loss = sum(losses) / len(losses)
-
-        return loss
-
-
-def _take_min(loss_tensor):
-    return torch.mean(torch.min(
-        loss_tensor + 2*torch.max(loss_tensor)*(loss_tensor==0).type(torch.FloatTensor).to(loss_tensor.device), 1)[0])
-
-
-def _take_mml(loss_tensor):
-    marginal_prob = torch.sum(torch.exp(-loss_tensor - 1e10 * (loss_tensor==0).float()), 1)
-    return -torch.mean(torch.log(marginal_prob.clamp_(1e-9, 1)))

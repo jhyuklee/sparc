@@ -35,13 +35,14 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.optim import Adam
 
 import tokenization
-from modeling import BertConfig, BertForPIQA
+import utils
+from modeling import BertConfig, DenSPI
 from optimization import BERTAdam
 from post import write_predictions, write_hdf5, get_question_results, \
-    convert_question_features_to_dataloader, write_question_results, write_predictions_nq
+    convert_question_features_to_dataloader, write_question_results
 from pre import convert_examples_to_features, read_squad_examples, convert_documents_to_features, \
     convert_questions_to_features, SquadExample, inject_noise_to_neg_features_list, sample_similar_questions, \
-    compute_tfidf, convert_idxs_to_features
+    compute_tfidf
 
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s', datefmt='%m/%d/%Y %H:%M:%S',
@@ -51,10 +52,6 @@ logger = logging.getLogger(__name__)
 RawResult = collections.namedtuple(
     "RawResult",
     ["unique_id", "all_logits", "filter_start_logits", "filter_end_logits", "loss"]
-)
-NQResult = collections.namedtuple(
-    "RawResult",
-    ["unique_id", "start_logits", "end_logits", "switch"]
 )
 ContextResult = collections.namedtuple(
     "ContextResult",
@@ -70,11 +67,10 @@ def main():
     parser = argparse.ArgumentParser()
 
     # Data paths
-    parser.add_argument('--fs', type=str, default='local', help="File system: local|nsml|nfs|nfs_nsml.")
     parser.add_argument('--data_dir', default='data/', type=str)
     parser.add_argument("--train_file", default='train-v1.1.json', type=str, help="json for training.")
     parser.add_argument("--predict_file", default='dev-v1.1.json', type=str, help="json for prediction.")
-    parser.add_argument('--has_answers', default=False, action='store_true', help="if predict file has position answer")
+    parser.add_argument('--has_answers', default=True, action='store_true', help="if predict file has position answer")
 
     # Metadata paths
     parser.add_argument('--metadata_dir', default='metadata/', type=str, help="Dir for pre-trained models.")
@@ -90,7 +86,6 @@ def main():
     parser.add_argument("--output_dir", default='out/', type=str, help="storing models and predictions")
     parser.add_argument("--dump_dir", default='test/', type=str)
     parser.add_argument("--dump_file", default='phrase.hdf5', type=str, help="dump phrases of file.")
-    parser.add_argument("--question_emb_file", default='question.hdf5', type=str, help="question output file.")
     parser.add_argument("--train_question_emb_file", default='train_question.hdf5', type=str, help="Used for neg train.")
     parser.add_argument('--load_dir', default='out/', type=str, help="Dir for checkpoints of models to load.")
     parser.add_argument('--load_epoch', type=str, default='1', help="Epoch of model to load.")
@@ -102,23 +97,15 @@ def main():
     parser.add_argument("--do_train_filter", default=False, action='store_true', help='Train filter or not.')
     parser.add_argument("--do_predict", default=False, action='store_true', help="Whether to run eval on the dev set.")
     parser.add_argument('--do_eval', default=False, action='store_true')
-    parser.add_argument('--do_embed_question', default=False, action='store_true')
     parser.add_argument('--do_dump', default=False, action='store_true')
 
     # Model options: if you change these, you need to train again
     parser.add_argument("--do_case", default=False, action='store_true', help="Whether to keep upper casing")
-    parser.add_argument("--use_sparse", default=False, action='store_true')
-    parser.add_argument("--use_biobert", default=False, action='store_true')
+    parser.add_argument("--use_sparse", default=True, action='store_true')
     parser.add_argument("--sparse_ngrams", default='1,2', type=str)
-    parser.add_argument("--max_neg_par", default=10, type=int, help="used in neg2 training")
     parser.add_argument("--neg_with_tfidf", default=False, action='store_true')
     parser.add_argument("--skip_no_answer", default=False, action='store_true')
-    parser.add_argument('--freeze_word_emb', default=False, action='store_true')
-    parser.add_argument('--append_title', default=False, action='store_true')
-
-    # For NQ (hard-em)
-    parser.add_argument('--max_n_answers', type=int, default=20)
-    parser.add_argument('--n_paragraphs', type=str, default='40')
+    parser.add_argument('--freeze_word_emb', default=True, action='store_true')
 
     # GPU and memory related options
     parser.add_argument("--max_seq_length", default=384, type=int,
@@ -132,8 +119,6 @@ def main():
     parser.add_argument("--predict_batch_size", default=64, type=int, help="Total batch size for predictions.")
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
-    parser.add_argument('--optimize_on_cpu', default=False, action='store_true',
-                        help="Whether to perform optimization and keep the optimizer averages on CPU")
     parser.add_argument("--no_cuda", default=False, action='store_true',
                         help="Whether not to use CUDA when available")
     parser.add_argument('--parallel', default=False, action='store_true')
@@ -151,9 +136,6 @@ def main():
                              "of training.")
 
     # Prediction options: only effective during prediction
-    parser.add_argument("--n_best_size", default=20, type=int,
-                        help="The total number of n-best predictions to generate in the nbest_predictions.json "
-                             "output file.")
     parser.add_argument("--max_answer_length", default=30, type=int,
                         help="The maximum length of an answer that can be generated. This is needed because the start "
                              "and end predictions are not conditioned on one another.")
@@ -165,9 +147,6 @@ def main():
     parser.add_argument('--dense_scale', default=20, type=float)
     parser.add_argument('--sparse_offset', default=1.6, type=float)
     parser.add_argument('--sparse_scale', default=80, type=float)
-
-    # Serve Options
-    parser.add_argument('--port', default=9009, type=int)
 
     # Others
     parser.add_argument("--verbose_logging", default=False, action='store_true',
@@ -181,60 +160,69 @@ def main():
     args = parser.parse_args()
 
     # Filesystem routines
-    if args.fs == 'local':
-        class Processor(object):
-            def __init__(self, save_path, load_path):
-                self._save = None
-                self._load = None
-                self._save_path = save_path
-                self._load_path = load_path
+    class Processor(object):
+        def __init__(self, save_path, load_path):
+            self._save = None
+            self._load = None
+            self._save_path = save_path
+            self._load_path = load_path
 
-            def bind(self, save, load):
-                self._save = save
-                self._load = load
+        def bind(self, save, load):
+            self._save = save
+            self._load = load
 
-            def save(self, checkpoint=None, save_fn=None, **kwargs):
-                path = os.path.join(self._save_path, str(checkpoint))
-                if save_fn is None:
-                    self._save(path, **kwargs)
-                else:
-                    save_fn(path, **kwargs)
+        def save(self, checkpoint=None, save_fn=None, **kwargs):
+            path = os.path.join(self._save_path, str(checkpoint))
+            if save_fn is None:
+                self._save(path, **kwargs)
+            else:
+                save_fn(path, **kwargs)
 
-            def load(self, checkpoint, load_fn=None, session=None, **kwargs):
-                assert self._load_path == session
-                path = os.path.join(self._load_path, str(checkpoint), 'model.pt')
-                if load_fn is None:
-                    self._load(path, **kwargs)
-                else:
-                    load_fn(path, **kwargs)
+        def load(self, checkpoint, load_fn=None, session=None, **kwargs):
+            assert self._load_path == session
+            path = os.path.join(self._load_path, str(checkpoint), 'model.pt')
+            if load_fn is None:
+                self._load(path, **kwargs)
+            else:
+                load_fn(path, **kwargs)
 
-        processor = Processor(args.output_dir, args.load_dir)
-    elif args.fs == 'nfs':
-        # args.load_dir should be the session name
-        # args.output_dir to NFS
-        import nsml
-        from nsml import NSML_NFS_OUTPUT
-        args.data_dir = os.path.join(NSML_NFS_OUTPUT, args.data_dir)
-        args.metadata_dir = os.path.join(NSML_NFS_OUTPUT, args.metadata_dir)
-        processor = nsml
-        args.output_dir = os.path.join(NSML_NFS_OUTPUT, args.output_dir)
-    elif args.fs == 'nsml':
-        # args.load_dir should be the session name
-        import nsml
-        from nsml import DATASET_PATH
-        args.data_dir = os.path.join(DATASET_PATH, 'train')
-        args.metadata_dir = os.path.join(DATASET_PATH, 'train')
-        processor = nsml
-    elif args.fs == 'nsml_nfs':
-        # args.load_dir should be the session name
-        import nsml
-        from nsml import NSML_NFS_OUTPUT
-        args.data_dir = os.path.join(NSML_NFS_OUTPUT, args.data_dir)
-        args.metadata_dir = os.path.join(NSML_NFS_OUTPUT, args.metadata_dir)
-        processor = nsml
-    else:
-        raise ValueError(args.fs)
+    # Save/Load function binding
+    def bind_model(processor, model, optimizer=None):
+        def save(filename, save_model=True, saver=None, **kwargs):
+            if not os.path.exists(filename):
+                os.makedirs(filename)
+            if save_model:
+                state = {'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
+                model_path = os.path.join(filename, 'model.pt')
+                dummy_path = os.path.join(filename, 'dummy')
+                torch.save(state, model_path)
+                with open(dummy_path, 'w') as fp:
+                    json.dump([], fp)
+                logger.info('Model saved at %s' % model_path)
+            if saver is not None:
+                saver(filename)
+        def load(filename, load_model=True, loader=None, **kwargs):
+            if load_model:
+                # logger.info('%s: %s' % (filename, os.listdir(filename)))
+                model_path = os.path.join(filename, 'model.pt')
+                if not os.path.exists(model_path):  # for compatibility
+                    model_path = filename
+                state = torch.load(model_path, map_location='cpu')
+                try:
+                    model.load_state_dict(state['model'])
+                    if optimizer is not None:
+                        optimizer.load_state_dict(state['optimizer'])
+                    logger.info('load okay')
+                except:
+                    # Backward compatibility
+                    model.load_state_dict(state, strict=False)
+                    utils.check_diff(model.state_dict(), state['model'])
+                logger.info('Model loaded from %s' % model_path)
+            if loader is not None:
+                loader(filename)
+        processor.bind(save=save, load=load)
 
+    processor = Processor(args.output_dir, args.load_dir)
     if not(args.do_train or args.do_train_neg):
         if args.do_load is False:
             logger.info("Setting do_load to true for prediction")
@@ -255,13 +243,12 @@ def main():
 
     # Output paths
     args.dump_file = os.path.join(args.dump_dir, args.dump_file)
-    args.question_emb_file = os.path.join(args.output_dir, args.question_emb_file)
     args.train_question_emb_file = os.path.join(args.output_dir, args.train_question_emb_file)
 
     # CUDA Check
     logger.info('cuda availability: {}'.format(torch.cuda.is_available()))
-    if not torch.cuda.is_available() and args.fs != 'local':
-        logger.info('We don\'t train or test on CPUs. Bye Bye~!')
+    if not torch.cuda.is_available() and (args.do_train or args.do_train_neg or args.do_train_filter):
+        logger.info('We do not support training with CPUs.')
         exit()
 
     # Multi-GPU stuff
@@ -306,19 +293,12 @@ def main():
         os.makedirs(args.dump_dir, exist_ok=True)
 
     # Get model and tokenizer
-    if args.use_biobert:
-        assert args.do_case, 'Set do_case for BioBERT'
-        assert args.bert_model_option == 'base_cased', 'only base-cased supported for BioBERT'
-    model = BertForPIQA(bert_config,
-        span_vec_size=64,
-        context_layer_idx=-1,
-        question_layer_idx=-1,
+    model = DenSPI(bert_config,
         sparse_ngrams=args.sparse_ngrams.split(','),
         use_sparse=args.use_sparse,
-        use_biobert=args.use_biobert,
         neg_with_tfidf=args.neg_with_tfidf,
         do_train_filter=args.do_train_filter,
-        min_word_id=999 if not args.use_biobert else 106
+        min_word_id=999 if not args.do_case else 106
     )
     logger.info('Number of model parameters: {:,}'.format(sum(p.numel() for p in model.parameters())))
     tokenizer = tokenization.FullTokenizer(vocab_file=args.vocab_file, do_lower_case=not args.do_case)
@@ -332,23 +312,13 @@ def main():
             if next(iter(state_dict)).startswith('bert.'):
                 state_dict = {key[len('bert.'):]: val for key, val in state_dict.items()}
                 state_dict = {key: val for key, val in state_dict.items() if key in model.bert.state_dict()}
-            check_diff(model.bert.state_dict(), state_dict)
+            utils.check_diff(model.bert.state_dict(), state_dict)
             model.bert.load_state_dict(state_dict)
             logger.info('Model initialized from the pre-trained BERT weight!')
 
     if args.fp16:
         model.half()
-
-    if not args.optimize_on_cpu:
-        model.to(device)
-
-    # Early bind and load for base model with multi-GPU
-    early_load = False
-    if args.do_load and args.bert_model_option == 'base_uncased' and n_gpu > 1:
-        bind_model(processor, model)
-        processor.load(args.load_epoch, session=args.load_dir)
-        early_load = True
-        logger.info("Loading single-gpu model on multi-gpu")
+    model.to(device)
 
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank],
@@ -357,7 +327,7 @@ def main():
         model = torch.nn.DataParallel(model)
         logger.info("Data parallel!")
 
-    if args.do_load and not early_load:
+    if args.do_load:
         bind_model(processor, model)
         processor.load(args.load_epoch, session=args.load_dir)
 
@@ -375,8 +345,7 @@ def main():
             input_file=args.predict_file,
             return_answers=args.has_answers,
             draft=args.draft,
-            draft_num_examples=args.draft_num_examples,
-            append_title=args.append_title)
+            draft_num_examples=args.draft_num_examples)
         eval_features, query_eval_features = convert_examples_to_features(
             examples=eval_examples,
             tokenizer=tokenizer,
@@ -424,7 +393,7 @@ def main():
     def predict_with_args(model, eval_data, args):
         if not args.do_predict:
             logger.info('do_predict turned off')
-            return 0, [0, 0]
+            return
 
         eval_dataloader, eval_examples, eval_features = eval_data
         model.eval()
@@ -471,21 +440,14 @@ def main():
                               not args.do_case, output_prediction_file,
                               output_score_file, args.verbose_logging,
                               args.filter_threshold)
-
+        
+        # For SQuAD-style evaluation
         if args.do_eval:
-            # For SQuAD-style evaluation
-            # command = "python official_eval/evaluate-v2.0.py %s %s -n %s" % (
-            #     args.predict_file, output_prediction_file, output_score_file
-            # )
-            command = "python official_eval/evaluate-v1.1.py %s %s" % (args.predict_file, output_prediction_file)
+            command = "python evaluate-v1.1.py %s %s" % (args.predict_file, output_prediction_file)
             process = subprocess.Popen(command.split(), stdout=subprocess.PIPE)
             output, error = process.communicate()
-            # metrics = json.loads(output)
             metrics = output
-            print(output)
-
-        # return val_loss, [float(metrics['exact_match']), float(metrics['f1'])]
-        return val_loss, [0, 0]
+            logger.info(f"[Validation] loss: {val_loss:.3f}, {output}")
 
     # Ready for the eval data
     eval_data = None
@@ -497,7 +459,7 @@ def main():
         print()
         train_examples = read_squad_examples(
             input_file=args.train_file, return_answers=True, draft=args.draft,
-            draft_num_examples=args.draft_num_examples, append_title=args.append_title)
+            draft_num_examples=args.draft_num_examples)
         train_features, train_features_ = convert_examples_to_features(
             examples=train_examples,
             tokenizer=tokenizer,
@@ -505,8 +467,7 @@ def main():
             doc_stride=args.doc_stride,
             max_query_length=args.max_query_length,
             return_answers=True,
-            # skip_no_answer=True, # For SQuAD
-            skip_no_answer=False, # For NQ
+            skip_no_answer=False,
             verbose=True,
             msg="Converting train examples")
 
@@ -580,21 +541,18 @@ def main():
                 loss.backward()
 
                 if (step + 1) % args.gradient_accumulation_steps == 0:
-                    if args.optimize_on_cpu:
-                        model.to('cpu')
                     optimizer.step()  # We have accumulated enought gradients
                     model.zero_grad()
-                    if args.optimize_on_cpu:
-                        model.to(device)
                     global_step += 1
 
             logger.info("[Epoch %d] Average train loss: %.2f"% (epoch+1, total_loss / len(train_dataloader)))
-            val_loss, acc = predict_with_args(model, eval_data, args)
-            logger.info("[Epoch %d] Validation loss: %.2f, em/f1: %.2f%%/%.2f%%"% (epoch+1, val_loss, acc[0], acc[1]))
+            predict_with_args(model, eval_data, args)
             processor.save(epoch + 1)
 
-    # Embed question for train neg
-    if args.do_train_neg and args.do_embed_question:
+    # Train with negative samples
+    if args.do_train_neg:
+
+        # Embed question for train neg
         question_examples = read_squad_examples(
             question_only=True,
             input_file=args.train_file, return_answers=False, draft=args.draft,
@@ -613,11 +571,9 @@ def main():
         logger.info('Writing %s' % args.train_question_emb_file)
         write_question_results(question_results, query_eval_features, args.train_question_emb_file)
 
-    # Train with negative samples
-    if args.do_train_neg:
         train_examples = read_squad_examples(
             input_file=args.train_file, return_answers=True, draft=args.draft,
-            draft_num_examples=args.draft_num_examples, append_title=args.append_title)
+            draft_num_examples=args.draft_num_examples)
 
         global_step = 0
         train_features, train_features_ = convert_examples_to_features(
@@ -648,7 +604,6 @@ def main():
 
         neg_train_features = sample_similar_questions(train_examples, train_features, args.train_question_emb_file,
                                                       cuda=not args.no_cuda)
-        # neg_train_features = random.sample(train_features, len(train_features))
         neg_train_features = inject_noise_to_neg_features_list(neg_train_features,
                                                                noise_prob=0.2,
                                                                clamp=True, clamp_prob=0.1,
@@ -729,24 +684,19 @@ def main():
                 loss.backward()
 
                 if (step + 1) % args.gradient_accumulation_steps == 0:
-                    if args.optimize_on_cpu:
-                        model.to('cpu')
                     optimizer.step()  # We have accumulated enought gradients
                     model.zero_grad()
-                    if args.optimize_on_cpu:
-                        model.to(device)
                     global_step += 1
 
             logger.info("[Epoch %d] Average train neg loss: %.3f"% (epoch+1, total_loss / len(train_dataloader)))
-            val_loss, acc = predict_with_args(model, eval_data, args)
-            logger.info("[Epoch %d] Validation loss: %.3f, em/f1: %.2f%%/%.2f%%"% (epoch+1, val_loss, acc[0], acc[1]))
+            predict_with_args(model, eval_data, args)
             processor.save(epoch + 1)
 
     # Train Filter
     if args.do_train_filter:
         train_examples = read_squad_examples(
             input_file=args.train_file, return_answers=True, draft=args.draft,
-            draft_num_examples=args.draft_num_examples, append_title=args.append_title)
+            draft_num_examples=args.draft_num_examples)
 
         global_step = 0
         train_features, train_features_ = convert_examples_to_features(
@@ -820,12 +770,8 @@ def main():
                 loss.backward()
 
                 if (step + 1) % args.gradient_accumulation_steps == 0:
-                    if args.optimize_on_cpu:
-                        model.to('cpu')
                     optimizer.step()  # We have accumulated enought gradients
                     model.zero_grad()
-                    if args.optimize_on_cpu:
-                        model.to(device)
                     global_step += 1
 
             processor.save(epoch + 1)
@@ -834,8 +780,7 @@ def main():
     # Run prediction
     if args.do_predict:
         print()
-        val_loss, acc = predict_with_args(model, eval_data, args)
-        logger.info("Final validation loss: %.2f, em/f1: %.2f%%/%.2f%%"% (val_loss, acc[0], acc[1]))
+        predict_with_args(model, eval_data, args)
 
     # Dump phrases
     if args.do_dump:
@@ -862,7 +807,7 @@ def main():
             context_examples = read_squad_examples(
                 context_only=True,
                 input_file=predict_file, return_answers=False, draft=args.draft,
-                draft_num_examples=args.draft_num_examples, append_title=args.append_title)
+                draft_num_examples=args.draft_num_examples)
 
             for example in context_examples:
                 example.doc_idx += offset
@@ -936,100 +881,6 @@ def main():
                        sparse_offset=args.sparse_offset, sparse_scale=args.sparse_scale,
                        use_sparse=args.use_sparse)
             logger.info('%s: %.1f mins' % (predict_file, (time() - t0) / 60))
-
-    # Embed questions
-    if args.do_embed_question:
-        question_examples = read_squad_examples(
-            question_only=True,
-            input_file=args.predict_file, return_answers=False, draft=args.draft,
-            draft_num_examples=args.draft_num_examples)
-        query_eval_features = convert_questions_to_features(
-            examples=question_examples,
-            tokenizer=tokenizer,
-            max_query_length=args.max_query_length)
-        question_dataloader = convert_question_features_to_dataloader(query_eval_features, args.fp16, args.local_rank,
-                                                                      args.predict_batch_size)
-
-        model.eval()
-        logger.info("Start embedding")
-        question_results = get_question_results(question_examples, query_eval_features, question_dataloader, device,
-                                                model)
-        logger.info('Writing %s' % args.question_emb_file)
-        write_question_results(question_results, query_eval_features, args.question_emb_file)
-
-
-
-def bind_model(processor, model, optimizer=None):
-    def save(filename, save_model=True, saver=None, **kwargs):
-        if not os.path.exists(filename):
-            os.makedirs(filename)
-        if save_model:
-            state = {'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
-            model_path = os.path.join(filename, 'model.pt')
-            dummy_path = os.path.join(filename, 'dummy')
-            torch.save(state, model_path)
-            with open(dummy_path, 'w') as fp:
-                json.dump([], fp)
-            logger.info('Model saved at %s' % model_path)
-        if saver is not None:
-            saver(filename)
-
-    def load(filename, load_model=True, loader=None, **kwargs):
-        if load_model:
-            # logger.info('%s: %s' % (filename, os.listdir(filename)))
-            model_path = os.path.join(filename, 'model.pt')
-            if not os.path.exists(model_path):  # for compatibility
-                model_path = filename
-            state = torch.load(model_path, map_location='cpu')
-            try:
-                model.load_state_dict(state['model'])
-                if optimizer is not None:
-                    optimizer.load_state_dict(state['optimizer'])
-                logger.info('load okay')
-            except:
-                # Backward compatibility
-                # model.load_state_dict(load_backward(state), strict=False)
-                model.load_state_dict(state, strict=False)
-                check_diff(model.state_dict(), state['model'])
-            logger.info('Model loaded from %s' % model_path)
-        if loader is not None:
-            loader(filename)
-
-    processor.bind(save=save, load=load)
-
-
-def check_diff(model_a, model_b):
-    a_set = set([a for a in model_a.keys()])
-    b_set = set([b for b in model_b.keys()])
-    if a_set != b_set:
-        logger.info('load with different params =>')
-    if len(a_set - b_set) > 0:
-        logger.info('Loaded weight does not have ' + str(a_set - b_set))
-    if len(b_set - a_set) > 0:
-        logger.info('Model code does not have: ' + str(b_set - a_set))
-
-
-def load_backward(state):
-    new_state = collections.OrderedDict()
-    for key, val in state.items():
-        multi = False
-        if key.startswith('module.'):
-            multi = True
-            key = key[len('module.'):]
-
-        if key == 'true_help':
-            continue
-        if key.startswith('bert_q.'):
-            continue
-        if key.startswith('linear.'):
-            continue
-        if key.startswith('bert.'):
-            key = 'encoder.' + key
-
-        if multi:
-            key = 'module.' + key
-        new_state[key] = val
-    return new_state
 
 
 if __name__ == "__main__":
