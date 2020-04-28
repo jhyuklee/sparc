@@ -115,7 +115,7 @@ def main():
                         help="When splitting up a long document into chunks, how much stride to take between chunks.")
     parser.add_argument("--max_query_length", default=64, type=int,
                         help="Questions longer than this will be truncated to this length.")
-    parser.add_argument("--train_batch_size", default=8, type=int, help="Total batch size for training.")
+    parser.add_argument("--train_batch_size", default=12, type=int, help="Total batch size for training.")
     parser.add_argument("--predict_batch_size", default=64, type=int, help="Total batch size for predictions.")
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
