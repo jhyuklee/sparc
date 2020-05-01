@@ -449,7 +449,6 @@ class DenSPIServer(object):
         return result
 
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # QueryEncoder
@@ -531,32 +530,32 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    natural_kb = NaturalKB(args)
+    server = DenSPIServer(args)
 
     # Set ports
-    # natural_kb.query_port = '9010'
-    # natural_kb.doc_port = '9020'
-    # natural_kb.index_port = '10001'
+    # server.query_port = '9010'
+    # server.doc_port = '9020'
+    # sersver.index_port = '10001'
 
     if args.run_mode == 'q_serve':
-        logger.info(f'Query address: {natural_kb.get_address(natural_kb.query_port)}')
-        natural_kb.serve_query_encoder(args.query_port, args)
+        logger.info(f'Query address: {server.get_address(server.query_port)}')
+        server.serve_query_encoder(args.query_port, args)
 
     elif args.run_mode == 'd_serve':
-        logger.info(f'Doc address: {natural_kb.get_address(natural_kb.doc_port)}')
-        natural_kb.serve_doc_ranker(args.doc_port, args)
+        logger.info(f'Doc address: {server.get_address(server.doc_port)}')
+        server.serve_doc_ranker(args.doc_port, args)
 
     elif args.run_mode == 'p_serve':
-        logger.info(f'Query address: {natural_kb.get_address(natural_kb.query_port)}')
-        logger.info(f'Doc address: {natural_kb.get_address(natural_kb.doc_port)}')
-        logger.info(f'Index address: {natural_kb.get_address(natural_kb.index_port)}')
-        natural_kb.serve_phrase_index(args.index_port, args)
+        logger.info(f'Query address: {server.get_address(server.query_port)}')
+        logger.info(f'Doc address: {server.get_address(server.doc_port)}')
+        logger.info(f'Index address: {server.get_address(server.index_port)}')
+        server.serve_phrase_index(args.index_port, args)
 
     elif args.run_mode == 'query':
-        logger.info(f'Index address: {natural_kb.get_address(natural_kb.index_port)}')
+        logger.info(f'Index address: {server.get_address(server.index_port)}')
         query = 'Which Lisp framework has been developed for image processing?'
         # query = ' Several genetic factors have been related to HIV-1 resistance'
-        result = natural_kb.query(query)
+        result = server.query(query)
         logger.info(f'Answers to a question: {query}')
         logger.info(f'{[r["answer"] for r in result["ret"]]}')
 
@@ -576,13 +575,13 @@ if __name__ == '__main__':
             meta['context_entities'] = context_ents
 
     elif args.run_mode == 'batch_query':
-        logger.info(f'Index address: {natural_kb.get_address(natural_kb.index_port)}')
+        logger.info(f'Index address: {server.get_address(server.index_port)}')
         queries = [
             'Which Lisp framework has been developed for image processing?',
             'What are the 3 main bacteria found in human milk?',
             'Where did COVID-19 happen?'
         ]
-        result = natural_kb.batch_query(
+        result = server.batch_query(
             queries,
             max_answer_length=args.max_answer_length,
             start_top_k=args.start_top_k,
