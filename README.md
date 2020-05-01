@@ -1,5 +1,5 @@
 # Contextualize Sparse Representations (Sparc)
-This repository provides author's implementation of [Contextualized Sparse Representation for Real-Time Open-Domain Question Answering](https://arxiv.org). You can train and evaluate DenSPI+Sparc described in our paper and make your own phrase index for a demo.
+This repository provides author's implementation of [Contextualized Sparse Representation for Real-Time Open-Domain Question Answering](https://arxiv.org/abs/1911.02896). You can train and evaluate DenSPI+Sparc described in our paper and make your own phrase index for a demo.
 
 ## Environment
 Please install the Conda environment as follows:
