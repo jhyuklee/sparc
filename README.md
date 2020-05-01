@@ -60,7 +60,7 @@ $ python train.py --data_dir $DATA_DIR --metadata_dir $BERT_DIR --output_dir $OU
 ```
 
 We also provide a pretrained DenSPI+Sparc as follows:
-* DenSPI+Sparc pre-trained on SQuAD - [link](https://drive.google.com/open?id=1ft6_EAU1XtcBeCLmwkGXhemewppOs_SO)
+* DenSPI+Sparc pre-trained on SQuAD - [link]
 
 
 ## Phrase Index
