@@ -1,16 +1,17 @@
 # Contextualize Sparse Representations (Sparc)
-This repository provides author's implementation of [Contextualized Sparse Representation for Real-Time Open-Domain Question Answering](https://arxiv.org). You can train and evaluate DenSPI+CoSpR described in our paper and make your own phrase index for a demo.
+This repository provides author's implementation of [Contextualized Sparse Representation for Real-Time Open-Domain Question Answering](https://arxiv.org). You can train and evaluate DenSPI+Sparc described in our paper and make your own phrase index for a demo.
 
 ## Environment
 Please install the Conda environment as follows:
 ```bash
 $ conda env create -f environment.yml
-$ conda activate cospr
+$ conda activate sparc
 ```
 Note that this repository is mostly based on [DenSPI](https://github.com/uwnlp/denspi) and [DrQA](https://github.com/facebookresearch/DrQA).
 
 ## Resources
-We use [SQuAD v1.1](https://github.com/rajpurkar/SQuAD-explorer/tree/master/dataset) for training DenSPI+CoSpR. Please download them in `$DATA_DIR`.
+We use [SQuAD v1.1](https://github.com/rajpurkar/SQuAD-explorer/tree/master/dataset) for training DenSPI+
+. Please download them in `$DATA_DIR`.
 ```bash
 $ mkdir $DATA_DIR
 $ wget https://raw.githubusercontent.com/rajpurkar/SQuAD-explorer/master/dataset/train-v1.1.json -O $DATA_DIR/train-v1.1.json
@@ -29,7 +30,7 @@ $ wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-voc
 ```
 
 ## Model
-To train DenSPI+CoSpR, use `train.py`. Trained models will be saved in `$OUT_DIR1`.
+To train DenSPI+Sparc, use `train.py`. Trained models will be saved in `$OUT_DIR1`.
 ```bash
 $ mkdir $OUT_DIR1
 # Train with BERT-base
@@ -45,7 +46,7 @@ The result will look like (in case of BERT-base):
 04/28/2020 06:33:01 - INFO - __main__ -   [Validation] loss: 8.700, b'{"exact_match": 75.10879848628193, "f1": 83.42143097917004}\n'
 ```
 
-To use DenSPI+CoSpR in an open-domain setting, you have to additionally train it with negative samples. In case of DenSPI+CoSpR with BERT-base (same for BERT-large except `--bert_model_option` and `--parallel` arguments), commands for training on negative samples are:
+To use DenSPI+Sparc in an open-domain setting, you have to additionally train it with negative samples. In case of DenSPI+Sparc with BERT-base (same for BERT-large except `--bert_model_option` and `--parallel` arguments), commands for training on negative samples are:
 ```bash
 $ mkdir $OUT_DIR2
 $ python train.py --data_dir $DATA_DIR --metadata_dir $BERT_DIR --output_dir $OUT_DIR --bert_model_option 'base_uncased' --train_file train-v1.1.json --predict_file dev-v1.1.json --do_train_neg --do_predict --do_eval --do_load --load_dir $OUT_DIR1 --load_epoch 3
@@ -58,8 +59,8 @@ $ mkdir $OUT_DIR3
 $ python train.py --data_dir $DATA_DIR --metadata_dir $BERT_DIR --output_dir $OUT_DIR --bert_model_option 'base_uncased' --train_file train-v1.1.json --predict_file dev-v1.1.json --num_train_epochs 1 --do_train_filter --do_predict --do_eval --do_load --load_dir $OUT_DIR2 --load_epoch 3
 ```
 
-We also provide a pretrained DenSPI+CoSpR as follows:
-* DenSPI+CoSpR pre-trained on SQuAD - [link](https://drive.google.com/open?id=1ft6_EAU1XtcBeCLmwkGXhemewppOs_SO)
+We also provide a pretrained DenSPI+Sparc as follows:
+* DenSPI+Sparc pre-trained on SQuAD - [link](https://drive.google.com/open?id=1ft6_EAU1XtcBeCLmwkGXhemewppOs_SO)
 
 
 ## Phrase Index
@@ -91,4 +92,4 @@ This will host a new server in localhost with the specified port (default `$PORT
 ```
 
 ## Contact
-For any issues regarding CoSpR, please register a GitHub issue.
+For any issues regarding Sparc, please register a GitHub issue.
