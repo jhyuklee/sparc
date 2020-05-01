@@ -1,0 +1,9 @@
+*.swp
+out
+test
+__pycache__
+logs/
+pred/
+models/
+dumps*/
+data/
