@@ -64,22 +64,8 @@ We also provide a pretrained DenSPI+Sparc as follows:
 
 
 ## Phrase Index
-To make your own phrase index with different articles, run `create_dump.sh`. Make sure that the paths for pre-trained DenSPI and datasets (must be in SQuAD-format) are pointing the right directories.
-```bash
-$ ./create_dump.sh
-```
-This will create a new phrase dump under `dumps/$MODEL_$DATA`. See log files in `logs/` to check if dumping is done. After the dumping, you need to run `create_index.sh` to make a phrase index and tfidf vectors of documents and paragraphs.
-```bash
-$ ./create_index.sh
-```
-Before running, please change the directories in `create_index.sh` accordingly.
-
-## Hosting
-To serve your own covidAsk, use `serve.sh` script.
-```bash
-$ ./serve.sh
-```
-This will host a new server in localhost with the specified port (default `$PORT`: 9030). You will also need to serve query encoder (default `$Q_PORT`: 9010) and the metadata (default `$D_PORT`: 9020) at separate ports. Note that the model used for query encoding should be the same as the model that created the phrase dump.
+For now, please see [the original DenSPI repository](https://github.com/uwnlp/denspi) and [the recent application of DenSPI in COVID-19 domain](https://github.com/dmis-lab/covidAsk) for building phrase index using DenSPI+Sparc.
+The main changes in phrase indexing is in `mips_phrase.py` where Sparc is used for the open-domain QA inference (See [here](https://github.com/jhyuklee/sparc/blob/885729372706e227fa9c566ca51bd88de984710a/mips_phrase.py#L390-L410)).
 
 ## Reference
 ```
