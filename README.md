@@ -25,7 +25,7 @@ $ wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-con
 $ wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-uncased-pytorch_model.bin -O $BERT_DIR/pytorch_model_large_uncased.bin
 $ wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-uncased-config.json -O $BERT_DIR/bert_config_large_uncased.json
 # Vocabulary is the same for BERT-base and BERT-large.
-$ wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-vocab.txt -O $BERT_DIR/vocab.txt $ 
+$ wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-vocab.txt -O $BERT_DIR/vocab.txt
 ```
 
 ## Model
@@ -63,7 +63,7 @@ We also provide a pretrained DenSPI+CoSpR as follows:
 
 
 ## Phrase Index
-To make your own phrase index with different articles, run `create_dump.sh`. Make sure that the paths for pre-trained DenSPI and datasets (must be in SQuAD-format) are pointing the right directories.
+To make your own phrase index with different articles, run `create_dump.sh`. For a small-scale demo, we use all articles from the SQuAD development set. See [here](https://github.com/uwnlp/denspi#create-a-large-phrase-index) for building a large-scale phrase index such as whole Wikipedia. Make sure that the paths for pre-trained DenSPI and datasets (must be in SQuAD-format) are pointing the right directories.
 ```bash
 $ ./create_dump.sh
 ```
@@ -74,7 +74,7 @@ $ ./create_index.sh
 Before running, please change the directories in `create_index.sh` accordingly.
 
 ## Hosting
-To serve your own covidAsk, use `serve.sh` script.
+To serve your own demo, use `serve.sh` script.
 ```bash
 $ ./serve.sh
 ```
