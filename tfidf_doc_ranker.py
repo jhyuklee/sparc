@@ -51,14 +51,6 @@ class TfidfDocRanker(object):
         """Convert doc_index --> doc_id"""
         return self.doc_dict[1][doc_index]
 
-    def get_doc_meta(self, pmid_or_title):
-        """Convert pmid --> doc_meta"""
-        # TODO: change it to contain pmid or title separately
-        if len(self.doc_dict) == 3:
-            return self.doc_dict[2].get(pmid_or_title, {})
-        else:
-            return {}
-
     def closest_docs(self, query, k=1):
         """Closest docs by dot product between query and documents
         in tfidf weighted word vector space.

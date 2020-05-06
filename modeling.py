@@ -655,7 +655,7 @@ class DenSPI(nn.Module):
         self.bert = BertModel(config)
         self.bert_q = self.bert
 
-        # Sparse modules (CoSpR)
+        # Sparse modules (Sparc)
         self.sparse_start = nn.ModuleDict({
             key: SparseAttention(config, num_sparse_heads=1)
             for key in sparse_ngrams
@@ -668,7 +668,7 @@ class DenSPI(nn.Module):
         self.sparse_end_q =  self.sparse_end
 
         # Other parameters
-        self.linear = nn.Linear(config.hidden_size, 2) # For filter
+        self.linear = nn.Linear(config.hidden_size, config.hidden_size) # For filter
         self.default_value = nn.Parameter(torch.randn(1))
         self.tfidf_weight = nn.Parameter(torch.randn(1))
         self.min_word_id = min_word_id
@@ -724,7 +724,7 @@ class DenSPI(nn.Module):
             span_start, span_end = span_layer.chunk(2, dim=2)
             span_logits = span_start.matmul(span_end.transpose(1, 2))
 
-            # Calculate CoSpR
+            # Calculate Sparc
             start_sps = {}
             end_sps = {}
             sparse_mask = (input_ids >= self.min_word_id).float()
@@ -745,8 +745,8 @@ class DenSPI(nn.Module):
 
             # Filter calculation
             filter_start_logits, filter_end_logits = self.linear(context_layer_all).chunk(2, dim=2)
-            filter_start_logits = filter_start_logits.squeeze(2)
-            filter_end_logits = filter_end_logits.squeeze(2)
+            filter_start_logits = filter_start_logits[:,:,0]
+            filter_end_logits = filter_end_logits[:,:,0]
 
             # Embed context
             if query_ids is None:
@@ -758,7 +758,7 @@ class DenSPI(nn.Module):
             question_layer = question_layers[self.question_layer_idx][:, :, :-self.span_vec_size]
             query_start, query_end = question_layer[:, :1, :].chunk(2, dim=2)  # Just [CLS]
 
-            # For query-side CoSpR
+            # For query-side Sparc
             q_start_sps = {}
             q_end_sps = {}
             query_sparse_mask = ((query_ids >= self.min_word_id) & (query_ids != 1029)).float()
@@ -785,7 +785,7 @@ class DenSPI(nn.Module):
         end_logits = end.matmul(query_end.transpose(1, 2)).squeeze(-1)
         dense_logits = start_logits.unsqueeze(2) + end_logits.unsqueeze(1) + span_logits
 
-        # Get sparse logits
+        # Get sparse logits (kernelized)
         sp_logits = None
         if self.use_sparse:
             sp_logits_list = []
@@ -798,7 +798,7 @@ class DenSPI(nn.Module):
                 sp_start_logits = torch.zeros_like(_start_logits).to(_start_logits.device)
                 sp_end_logits = torch.zeros_like(_start_logits).to(_start_logits.device)
 
-                # logits for unigram CoSpR
+                # logits for unigram Sparc
                 if '1' in self.sparse_ngrams:
                     mxq = (_input_ids.unsqueeze(2) == query_ids.unsqueeze(1)) * (
                         _sparse_mask.unsqueeze(2).byte() * query_sparse_mask.unsqueeze(1).byte())
@@ -810,7 +810,7 @@ class DenSPI(nn.Module):
                     sp_end_logits += (_end_sps.matmul(mxq.float()).matmul(
                         q_end_sps['1'].unsqueeze(2))).squeeze(2) * _sparse_mask
 
-                # logits for bigram CoSpR
+                # logits for bigram Sparc
                 if '2' in self.sparse_ngrams:
                     bi_ids = torch.cat(
                         [_input_ids[:,:-1].unsqueeze(2), _input_ids[:,1:].unsqueeze(2)], 2
@@ -832,7 +832,7 @@ class DenSPI(nn.Module):
                     sp_end_logits[:,:-1] += (_end_sps[:,:-1,:-1].matmul(bi_mxq.float()).matmul(
                         q_end_sps['2'][:,:-1].unsqueeze(2))).squeeze(2) * bi_sparse_mask.float()
 
-                # logits for trigram CoSpR
+                # logits for trigram Sparc (Not used)
                 if '3' in self.sparse_ngrams:
                     tri_ids = torch.cat(
                             [_input_ids[:,:-2].unsqueeze(2), _input_ids[:,1:-1].unsqueeze(2),

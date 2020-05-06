@@ -9,7 +9,6 @@ import requests
 import logging
 import math
 import ssl
-import best
 import copy
 from time import time
 from flask import Flask, request, jsonify, render_template, redirect
@@ -21,18 +20,13 @@ from requests_futures.sessions import FuturesSession
 from tqdm import tqdm
 from collections import namedtuple
 
-from serve_utils import load_caches, parse_example, get_cached, get_search
-from train_query import train_query_encoder
 from modeling import BertConfig
-from query_encoder import QueryEncoder
+from modeling import DenSPI
 from tfidf_doc_ranker import TfidfDocRanker
-from run_natkb import check_diff
+from utils import check_diff
 from pre import SquadExample, convert_questions_to_features
 from post import convert_question_features_to_dataloader, get_question_results
 from mips_phrase import MIPS
-from mips_sent import MIPS_SENT
-from eval_utils import normalize_answer, f1_score, exact_match_score, drqa_exact_match_score, drqa_regex_match_score,\
-                       drqa_metric_max_over_ground_truths, drqa_normalize
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s', datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
@@ -60,17 +54,17 @@ class DenSPIServer(object):
 
         # Load pretrained QueryEncoder
         bert_config = BertConfig.from_json_file(bert_config_path)
-        model = QueryEncoder(bert_config, use_biobert=args.use_biobert, hard_em=args.hard_em)
+        model = DenSPI(bert_config)
         if args.parallel:
             model = torch.nn.DataParallel(model)
-        model.to(device)
-        state = torch.load(args.query_encoder_path, map_location=device)
+        state = torch.load(args.query_encoder_path, map_location='cpu')
         model.load_state_dict(state['model'], strict=False)
         check_diff(model.state_dict(), state['model'])
-        tokenizer = tokenization.FullTokenizer(vocab_file=vocab_path, do_lower_case=not args.do_case)
-
+        model.to(device)
         logger.info('Model loaded from %s' % args.query_encoder_path)
         logger.info('Number of model parameters: {:,}'.format(sum(p.numel() for p in model.parameters())))
+
+        tokenizer = tokenization.FullTokenizer(vocab_file=vocab_path, do_lower_case=not args.do_case)
         return model, tokenizer
 
     def get_question_dataloader(self, questions, tokenizer, batch_size):
@@ -127,7 +121,7 @@ class DenSPIServer(object):
         http_server.listen(query_port)
         IOLoop.instance().start()
 
-    def load_phrase_index(self, args, dump_only=False, sent_search=False):
+    def load_phrase_index(self, args, dump_only=False):
         if self.mips is not None:
             return self.mips
 
@@ -140,7 +134,7 @@ class DenSPIServer(object):
         max_norm_path = os.path.join(index_dir, 'max_norm.json')
 
         # Load mips
-        mips_init = MIPS if not sent_search else MIPS_SENT
+        mips_init = MIPS
         mips = mips_init(
             phrase_dump_dir=phrase_dump_dir,
             tfidf_dump_dir=tfidf_dump_dir,
@@ -148,51 +142,23 @@ class DenSPIServer(object):
             idx2id_path=idx2id_path,
             max_norm_path=max_norm_path,
             doc_rank_fn={
-                'index': self.get_doc_scores, 'top_docs': self.get_top_docs, 'doc_meta': self.get_doc_meta,
-                'spvec': self.get_q_spvecs
+                'index': self.get_doc_scores, 'top_docs': self.get_top_docs, 'spvec': self.get_q_spvecs
             },
             cuda=args.cuda, dump_only=dump_only
         )
         return mips
 
     def serve_phrase_index(self, index_port, args):
-        if index_port == '80':
-            app = Flask(__name__, static_url_path='/static', static_folder="static",
-                template_folder="templates")
-            app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
-            CORS(app)
-            @app.before_request
-            def before_request():
-                if request.url.startswith('http://'):
-                    url = request.url.replace('http://', 'https://', 1)
-                    code = 301
-                    return redirect(url, code=code)
-            http_server = HTTPServer(WSGIContainer(app))
-            http_server.listen(index_port)
-            IOLoop.instance().start()
-            return
-
-        dev_str = '_dev' if args.develop else ''
-        args.examples_path = os.path.join(f'static{dev_str}', args.examples_path)
-        args.google_examples_path = os.path.join(f'static{dev_str}', args.google_examples_path)
-        args.kcw_examples_path = os.path.join(f'static{dev_str}', args.kcw_examples_path)
-        args.top100_covid_examples_path = os.path.join(f'static{dev_str}', args.top100_covid_examples_path)
-        args.top100_google_examples_path = os.path.join(f'static{dev_str}', args.top100_google_examples_path)
-        args.top10_kcw_examples_path = os.path.join(f'static{dev_str}', args.top10_kcw_examples_path)
+        args.examples_path = os.path.join('static', args.examples_path)
 
         # Load mips
-        self.mips = self.load_phrase_index(args, sent_search=args.sent_search)
-        app = Flask(__name__, static_url_path='/static' + dev_str, static_folder="static" + dev_str,
-            template_folder="templates" + dev_str)
+        self.mips = self.load_phrase_index(args)
+        app = Flask(__name__, static_url_path='/static')
         app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
         CORS(app)
 
-        # From serve_utils
-        cached_set = load_caches(args)
-        index_example_set, search_examples, inverted_examples, query_entity_ids = parse_example(args)
-
         def batch_search(batch_query, max_answer_length=20, start_top_k=1000, mid_top_k=100, top_k=10, doc_top_k=5,
-                         nprobe=64, sparse_weight=0.05, search_strategy='hybrid', aggregate=False):
+                         nprobe=64, sparse_weight=0.05, search_strategy='hybrid'):
             t0 = time()
             outs, _ = self.embed_query(batch_query)()
             start = np.concatenate([out[0] for out in outs], 0)
@@ -206,29 +172,19 @@ class DenSPIServer(object):
                 query_vec, (input_ids, sparse_uni, sparse_bi), q_texts=batch_query, nprobe=nprobe,
                 doc_top_k=doc_top_k, start_top_k=start_top_k, mid_top_k=mid_top_k, top_k=top_k,
                 search_strategy=search_strategy, filter_=args.filter, max_answer_length=max_answer_length,
-                sparse_weight=sparse_weight, aggregate=aggregate
+                sparse_weight=sparse_weight
             )
             t1 = time()
             out = {'ret': rets, 'time': int(1000 * (t1 - t0))}
             return out
 
-
         @app.route('/')
         def index():
-            return render_template(f'index.html')
+            return app.send_static_file('index.html')
 
         @app.route('/files/<path:path>')
         def static_files(path):
             return app.send_static_file('files/' + path)
-
-        @app.route('/cached_example', methods=['GET'])
-        def cached_example():
-            start_time = time()
-            q_id = request.args['q_id']
-            res, query, query_info = get_cached(search_examples, q_id, query_entity_ids, cached_set)
-            latency = time() - start_time
-            latency = format(latency, ".3f")
-            return render_template(f'cached.html', latency=latency, res=res, query=query, query_info=query_info)
 
         # This one uses a default hyperparameters
         @app.route('/api', methods=['GET'])
@@ -267,13 +223,14 @@ class DenSPIServer(object):
                 nprobe=nprobe,
                 sparse_weight=sparse_weight,
                 search_strategy=strat,
-                aggregate=args.aggregate
             )
             return jsonify(out)
 
         @app.route('/get_examples', methods=['GET'])
         def get_examples():
-            return render_template(f'example.html', res = index_example_set)
+            with open(args.examples_path, 'r') as fp:
+                examples = [line.strip() for line in fp.readlines()]
+            return jsonify(examples)
 
         if self.query_port is None:
             logger.info('You must set self.query_port for querying. You can use self.update_query_port() later on.')
@@ -307,13 +264,6 @@ class DenSPIServer(object):
             logger.info(f'Returning from batch_doc_scores')
             return jsonify([top_idxs, top_scores])
 
-        @app.route('/doc_meta', methods=['POST'])
-        def doc_meta():
-            pmid = request.form['pmid']
-            doc_meta = doc_ranker.get_doc_meta(pmid)
-            # logger.info(f'Returning {len(doc_meta)} metadata from get_doc_meta')
-            return jsonify(doc_meta)
-
         @app.route('/text2spvec', methods=['POST'])
         def text2spvec():
             batch_query = json.loads(request.form['query'])
@@ -340,22 +290,6 @@ class DenSPIServer(object):
             emb = result.json()
             return emb, result.elapsed.total_seconds() * 1000
         return map_
-
-    def embed_all_query(self, questions, batch_size=16):
-        all_outs = []
-        for q_idx in tqdm(range(0, len(questions), batch_size)):
-            outs, _ = self.embed_query(questions[q_idx:q_idx+batch_size])()
-            all_outs += outs
-        start = np.concatenate([out[0] for out in all_outs], 0)
-        end = np.concatenate([out[1] for out in all_outs], 0)
-
-        # input ids are truncated (no [CLS], [SEP]) but sparse vals are not ([CLS] max_len [SEP])
-        sparse_uni = [out[2]['1'][1:len(out[3])+1] for out in all_outs]
-        sparse_bi = [out[2]['2'][1:len(out[3])+1] for out in all_outs]
-        input_ids = [out[3] for out in all_outs]
-        query_vec = np.concatenate([start, end, [[1]]*len(all_outs)], 1)
-        logger.info(f'Query reps: {query_vec.shape}, {len(input_ids)}, {len(sparse_uni)}, {len(sparse_bi)}')
-        return query_vec, input_ids, sparse_uni, sparse_bi
 
     def query(self, query, search_strategy='hybrid'):
         params = {'query': query, 'strat': search_strategy}
@@ -422,20 +356,6 @@ class DenSPIServer(object):
             logger.info(res.text)
         return result
 
-    def get_doc_meta(self, pmid):
-        post_data = {
-            'pmid': pmid
-        }
-        res = requests.post(self.get_address(self.doc_port) + '/doc_meta', data=post_data)
-        if res.status_code != 200:
-            logger.info('Wrong behavior %d' % res.status_code)
-        try:
-            result = json.loads(res.text)
-        except Exception as e:
-            logger.info(f'no response or error for {pmid}')
-            logger.info(res.text)
-        return result
-
     def get_q_spvecs(self, batch_query):
         post_data = {'query': json.dumps(batch_query)}
         res = requests.post(self.get_address(self.doc_port) + '/text2spvec', data=post_data)
@@ -458,7 +378,6 @@ if __name__ == '__main__':
     parser.add_argument("--bert_model_option", default='large_uncased', type=str)
     parser.add_argument("--parallel", default=False, action='store_true')
     parser.add_argument("--do_case", default=False, action='store_true')
-    parser.add_argument("--use_biobert", default=False, action='store_true')
     parser.add_argument("--query_encoder_path", default='/nvme/jinhyuk/denspi/KR94373_piqa-nfs_1173/1/model.pt', type=str)
     parser.add_argument("--query_port", default='-1', type=str)
 
@@ -474,7 +393,6 @@ if __name__ == '__main__':
     parser.add_argument('--index_name', default='index.faiss')
     parser.add_argument('--idx2id_name', default='idx2id.hdf5')
     parser.add_argument('--index_port', default='-1', type=str)
-    parser.add_argument('--sent_search', default=False, action='store_true')
 
     # These can be dynamically changed.
     parser.add_argument('--max_answer_length', default=20, type=int)
@@ -486,34 +404,10 @@ if __name__ == '__main__':
     parser.add_argument('--sparse_weight', default=0.05, type=float)
     parser.add_argument('--search_strategy', default='hybrid')
     parser.add_argument('--filter', default=False, action='store_true')
-    parser.add_argument('--aggregate', default=False, action='store_true')
     parser.add_argument('--no_para', default=False, action='store_true')
 
     # Serving options
-    parser.add_argument('--examples_path', default='queries/examples_covid_paraphrased.json')
-    parser.add_argument('--google_examples_path', default='queries/examples_google_query.json')
-    parser.add_argument('--kcw_examples_path', default='queries/examples_covid_eval_kcw.json')
-    parser.add_argument('--top100_covid_examples_path', default='queries/top100_covid_paraphrased.json')
-    parser.add_argument('--top100_google_examples_path', default='queries/top100_google_query.json')
-    parser.add_argument('--top10_kcw_examples_path', default='queries/top10_covid_eval_kcw.json')
-    parser.add_argument('--develop', default=False, action='store_true')
-
-    # Training (query_encoder)
-    parser.add_argument('--train_path', default=None)
-    parser.add_argument('--train_batch_size', default=10, type=int)
-    parser.add_argument('--num_train_epochs', default=10, type=int)
-    parser.add_argument("--learning_rate", default=3e-5, type=float)
-    parser.add_argument("--warmup_proportion", default=0.1, type=float)
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
-    parser.add_argument('--hard_em', default=False, action='store_true')
-    parser.add_argument('--model_save_dir', default='models')
-
-    # Evaluation
-    parser.add_argument('--test_path', default='datasets/open-qa/squad/dev-v1.1_preprocessed_sampled.json')
-    parser.add_argument('--candidate_path', default=None)
-    parser.add_argument('--regex', default=False, action='store_true')
-    parser.add_argument('--eval_batch_size', default=10, type=int)
-    parser.add_argument('--top_phrase_path', default='top_phrases.json')
+    parser.add_argument('--examples_path', default='examples.txt')
 
     # Run mode
     parser.add_argument('--base_ip', default='http://163.152.163.248')
@@ -553,33 +447,16 @@ if __name__ == '__main__':
 
     elif args.run_mode == 'query':
         logger.info(f'Index address: {server.get_address(server.index_port)}')
-        query = 'Which Lisp framework has been developed for image processing?'
-        # query = ' Several genetic factors have been related to HIV-1 resistance'
+        query = 'Name three famous writers'
         result = server.query(query)
         logger.info(f'Answers to a question: {query}')
         logger.info(f'{[r["answer"] for r in result["ret"]]}')
 
-        # Reshape metadata
-        for result_ in result['ret']:
-            meta = result_['metadata']
-            if 'context_entities' not in meta:
-                meta['context_entities'] = {}
-                continue
-            context_ents = [ # Initialize
-                {k: [v_ for v_ in v.values()] for k, v in val.items()} for val in meta['context_entities'].values()
-            ][0]
-            assert len(meta['context_entities']) == 1, 'Currently single para is supported'
-            for ii in range(1, len(meta['context_entities'])):
-                for k, v in meta['context_entities'][ii]:
-                    context_ents[k] += v
-            meta['context_entities'] = context_ents
-
     elif args.run_mode == 'batch_query':
         logger.info(f'Index address: {server.get_address(server.index_port)}')
-        queries = [
-            'Which Lisp framework has been developed for image processing?',
-            'What are the 3 main bacteria found in human milk?',
-            'Where did COVID-19 happen?'
+        queries= [
+            'Name three famous writers',
+            'Who was defeated by computer in chess game?'
         ]
         result = server.batch_query(
             queries,
@@ -595,6 +472,21 @@ if __name__ == '__main__':
         for query, result in zip(queries, result['ret']):
             logger.info(f'Answers to a question: {query}')
             logger.info(f'{[r["answer"] for r in result]}')
+
+    elif args.run_mode == 'get_doc_scores':
+        logger.info(f'Doc address: {server.get_address(server.doc_port)}')
+        queries = [
+            'What was the Yuan\'s paper money called?',
+            'What makes a successful startup??',
+            'On which date was Genghis Khan\'s palace rediscovered by archeaologists?',
+            'To-y is a _ .'
+        ]
+        result = server.get_doc_scores(queries, [[36], [2], [31], [22222]])
+        logger.info(result)
+        result = server.get_top_docs(queries, 5)
+        logger.info(result)
+        result = server.get_q_spvecs(queries)
+        logger.info(result)
 
     else:
         raise NotImplementedError
