@@ -177,6 +177,3 @@ The main changes in phrase indexing is in `post.py` and `mips_phrase.py` where S
   year={2020}
 }
 ```
-
-## Contact
-For any issues regarding Sparc, please register a GitHub issue.
