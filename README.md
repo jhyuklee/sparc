@@ -122,7 +122,7 @@ The result file `$OUT_DIR/output.json` will show Sparc embedding of the input te
 ```
 Note that each text is segmented by the BERT tokenizer (`"vocab"` denotes the BERT vocab index).
 
-To see how Sparc changes for each phrase, set `start_index` to the target token position. For instance, setting `start_index = 17` to embed Sparc of `415,000` of the following text gives you (some n-grams are omitted):
+To see how Sparc changes for each phrase, set `start_index` in [here](https://github.com/jhyuklee/sparc/blob/750bf1a2b79f0e074edb77ef535c7e2861ffd8fd/post.py#L371) to the target token position. For instance, setting `start_index = 17` to embed Sparc of `415,000` of the following text gives you (some n-grams are omitted):
 
 ```json
             "text": "Between 1991 and 2000, the total area of forest lost in the Amazon rose from 415,000 to 587,000 square kilometres.",
