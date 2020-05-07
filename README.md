@@ -5,7 +5,7 @@
 </a>
 </h3>
 <div align="center">
-    <p> Contextualized Sparse Representations for Real-Time Open-Domain Question Answering
+    <p> <b>C</b>ontextualized <b>Spar</b>se Representations for Real-Time Open-Domain Question Answering
 </div>
 
 <div align="center">
