@@ -166,7 +166,7 @@ whereas setting `start_index = 21` to embed Sparc of `587,000` gives you:
 
 ## Phrase Index
 For now, please see [the original DenSPI repository](https://github.com/uwnlp/denspi) or [the recent application of DenSPI in COVID-19 domain](https://github.com/dmis-lab/covidAsk) for building phrase index using DenSPI+Sparc.
-The main changes in phrase indexing is in `post.py` and `mips_phrase.py` where Sparc is used for the open-domain QA inference (See [here](https://github.com/jhyuklee/sparc/blob/885729372706e227fa9c566ca51bd88de984710a/mips_phrase.py#L390-L410)).
+The main changes in phrase indexing are in `post.py` and `mips_phrase.py` where Sparc is used for the open-domain QA inference (See [here](https://github.com/jhyuklee/sparc/blob/885729372706e227fa9c566ca51bd88de984710a/mips_phrase.py#L390-L410)).
 
 ## Reference
 ```bibtex
