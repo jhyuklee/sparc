@@ -10,7 +10,7 @@
 
 <div align="center">
   <img alt="Sparc Demo" src="https://github.com/jhyuklee/sparc/blob/master/static/preview.png" width="700px" style="margin-top:10px;margin-bottom:15px">
-</div>
+</div><br>
 
 This repository provides author's implementation of [Contextualized Sparse Representation for Real-Time Open-Domain Question Answering](https://arxiv.org/abs/1911.02896). You can train and evaluate DenSPI+Sparc described in our paper and make your own Sparc vector. You can try our open-domain QA demo at [http://sparc.korea.ac.kr](http://sparc.korea.ac.kr).
 
