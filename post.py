@@ -356,6 +356,80 @@ def write_hdf5(all_examples, all_features, all_results,
         print(k, v)
 
 
+def write_embed(all_examples, all_features, all_results, max_answer_length, do_lower_case, embed_path):
+    assert len(all_examples) > 0
+
+    id2feature = {feature.unique_id: feature for feature in all_features}
+    id2example = {id_: all_examples[id2feature[id_].example_index] for id_ in id2feature}
+    features = []
+    results = []
+    outs = []
+
+    def write(features, results):
+        out_json = {'uni': {}, 'bi': {}}
+        for par_index in range(len(features)):
+            start_index = 0
+            for vidx, (v1, v2, v3) in enumerate(zip(
+                    features[par_index].tokens[1:-1],
+                    results[par_index].start_sp['1'][start_index][1:len(features[par_index].tokens)-1],
+                    features[par_index].input_ids[1:-1]
+                )):
+                if vidx == start_index-1:
+                    cprint('{}({:.3f}, {})'.format(v1, v2, vidx), 'green', end=' ')
+                    continue
+                if v1 not in out_json['uni']:
+                    out_json['uni'][v1] = {'score': v2.item(), 'vocab': str(v3)}
+                else:
+                    out_json['uni'][v1]['score'] += v2.item()
+                if v2 > 1.0:
+                    cprint('{}({:.3f}, {})'.format(v1, v2, vidx), 'red', end=' ')
+                else:
+                    print('{}({:.3f}, {})'.format(v1, v2, vidx), end=' ')
+            print()
+
+            for vidx, (v1, v2, v3) in enumerate(zip(
+                    zip(features[par_index].tokens[1:-2], features[par_index].tokens[2:-1]),
+                    results[par_index].start_sp['2'][start_index][1:len(features[par_index].tokens)-2],
+                    zip(features[par_index].input_ids[1:-2], features[par_index].input_ids[2:-1])
+                )):
+                v1 = ' '.join(v1)
+                if vidx == start_index-1:
+                    cprint('{}({:.3f}, {})'.format(v1, v2, vidx), 'green', end=' ')
+                    continue
+                if v1 not in out_json['bi']:
+                    out_json['bi'][v1] = {'score': v2.item(), 'vocab': ', '.join([str(k) for k in v3])}
+                else:
+                    out_json['bi'][v1]['score'] += v2.item()
+                if v2 > 1.0:
+                    cprint('{}({:.3f}, {})'.format(v1, v2, vidx), 'red', end=' ')
+                else:
+                    print('{}({:.3f}, {})'.format(v1, v2, vidx), end=' ')
+            print()
+            print()
+        for key, val in out_json.items():
+            out_json[key] = dict(sorted(out_json[key].items(), key=lambda x: x[1]['score'], reverse=True))
+            out_json[key] = dict(filter(lambda x: x[1]['score'] > 0, out_json[key].items()))
+        return out_json
+
+    for count, result in enumerate(tqdm(all_results, total=len(all_features))):
+        example = id2example[result.unique_id]
+        feature = id2feature[result.unique_id]
+        condition = len(features) > 0 and example.par_idx == 0 and feature.doc_span_index == 0
+
+        if condition:
+            outs.append({'text': prev_example.paragraph_text, 'sparc': write(features, results)})
+            features = [feature]
+            results = [result]
+        else:
+            features.append(feature)
+            results.append(result)
+        prev_example = example
+    outs.append({'text': prev_example.paragraph_text, 'sparc': write(features, results)})
+
+    with open(embed_path, 'w') as f:
+        json.dump({'out': outs}, f, indent=4)
+
+
 def write_predictions(all_examples, all_features, all_results,
                       max_answer_length, do_lower_case, output_prediction_file, 
                       output_score_file, verbose_logging, threshold):

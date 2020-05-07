@@ -740,8 +740,8 @@ class DenSPI(nn.Module):
                     (1 - input_mask).float() * -1e9,
                     input_ids, ngram=self.sparse_ngrams,
                 )
-                start_sps[ngram] = start_sps[ngram][:,:,0,:] * sparse_mask.unsqueeze(2) * input_diag.unsqueeze(0)
-                end_sps[ngram] = end_sps[ngram][:,:,0,:] * sparse_mask.unsqueeze(2) * input_diag.unsqueeze(0)
+                start_sps[ngram] = start_sps[ngram][:,:,0,:] * sparse_mask.unsqueeze(1) * input_diag.unsqueeze(0)
+                end_sps[ngram] = end_sps[ngram][:,:,0,:] * sparse_mask.unsqueeze(1) * input_diag.unsqueeze(0)
 
             # Filter calculation
             filter_start_logits, filter_end_logits = self.linear(context_layer_all).chunk(2, dim=2)

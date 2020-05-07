@@ -39,10 +39,10 @@ import utils
 from modeling import BertConfig, DenSPI
 from optimization import BERTAdam
 from post import write_predictions, write_hdf5, get_question_results, \
-    convert_question_features_to_dataloader, write_question_results
+    convert_question_features_to_dataloader, write_question_results, write_embed
 from pre import convert_examples_to_features, read_squad_examples, convert_documents_to_features, \
     convert_questions_to_features, SquadExample, inject_noise_to_neg_features_list, sample_similar_questions, \
-    compute_tfidf
+    compute_tfidf, read_text_examples
 
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s', datefmt='%m/%d/%Y %H:%M:%S',
@@ -98,6 +98,7 @@ def main():
     parser.add_argument("--do_predict", default=False, action='store_true', help="Whether to run eval on the dev set.")
     parser.add_argument('--do_eval', default=False, action='store_true')
     parser.add_argument('--do_dump', default=False, action='store_true')
+    parser.add_argument('--do_embed', default=False, action='store_true')
 
     # Model options: if you change these, you need to train again
     parser.add_argument("--do_case", default=False, action='store_true', help="Whether to keep upper casing")
@@ -208,6 +209,9 @@ def main():
                 if not os.path.exists(model_path):  # for compatibility
                     model_path = filename
                 state = torch.load(model_path, map_location='cpu')
+                sample_weight = list(state['model'].keys())[10]
+                logger.info(f'Loaded weight has {state["model"][sample_weight][0]} in {sample_weight}')
+                logger.info(f'Before loading, model has {model.state_dict()[sample_weight][0]} in {sample_weight}')
                 try:
                     model.load_state_dict(state['model'])
                     if optimizer is not None:
@@ -215,8 +219,9 @@ def main():
                     logger.info('load okay')
                 except:
                     # Backward compatibility
-                    model.load_state_dict(state, strict=False)
+                    model.load_state_dict(state['model'], strict=False)
                     utils.check_diff(model.state_dict(), state['model'])
+                logger.info(f'After loading, model has {model.state_dict()[sample_weight][0]} in {sample_weight}')
                 logger.info('Model loaded from %s' % model_path)
             if loader is not None:
                 loader(filename)
@@ -881,6 +886,72 @@ def main():
                        sparse_offset=args.sparse_offset, sparse_scale=args.sparse_scale,
                        use_sparse=args.use_sparse)
             logger.info('%s: %.1f mins' % (predict_file, (time() - t0) / 60))
+
+    if args.do_embed:
+        context_examples = read_text_examples(
+            input_file=args.predict_file, draft=args.draft, draft_num_examples=args.draft_num_examples
+        )
+
+        context_features = convert_documents_to_features(
+            examples=context_examples,
+            tokenizer=tokenizer,
+            max_seq_length=args.max_seq_length,
+            doc_stride=args.doc_stride)
+
+        logger.info("***** Embedding %s *****" % args.predict_file)
+        logger.info("  Num orig examples = %d", len(context_examples))
+        logger.info("  Num split examples = %d", len(context_features))
+        logger.info("  Batch size = %d", args.predict_batch_size)
+
+        all_input_ids = torch.tensor([f.input_ids for f in context_features], dtype=torch.long)
+        all_input_mask = torch.tensor([f.input_mask for f in context_features], dtype=torch.long)
+        all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
+
+        context_data = TensorDataset(all_input_ids, all_input_mask, all_example_index)
+
+        if args.local_rank == -1:
+            context_sampler = SequentialSampler(context_data)
+        else:
+            context_sampler = DistributedSampler(context_data)
+        context_dataloader = DataLoader(context_data, sampler=context_sampler,
+                                        batch_size=args.predict_batch_size)
+
+        model.eval()
+        logger.info("Start embedding")
+
+        def get_context_results():
+            for (input_ids, input_mask, example_indices) in context_dataloader:
+                input_ids = input_ids.to(device)
+                input_mask = input_mask.to(device)
+                with torch.no_grad():
+                    batch_start, batch_end, batch_span_logits, batch_filter_start, batch_filter_end, sp_s, sp_e = model(
+                                                                                                input_ids=input_ids,
+                                                                                                input_mask=input_mask)
+                for i, example_index in enumerate(example_indices):
+                    start = batch_start[i].detach().cpu().numpy().astype(args.dtype)
+                    end = batch_end[i].detach().cpu().numpy().astype(args.dtype)
+                    sparse = None
+                    if len(sp_s) > 0:
+                        b_ssp = {ng: bb_ssp[i].detach().cpu().numpy().astype(args.dtype) for ng, bb_ssp in sp_s.items()}
+                        b_esp = {ng: bb_esp[i].detach().cpu().numpy().astype(args.dtype) for ng, bb_esp in sp_e.items()}
+                    span_logits = batch_span_logits[i].detach().cpu().numpy().astype(args.dtype)
+                    filter_start_logits = batch_filter_start[i].detach().cpu().numpy().astype(args.dtype)
+                    filter_end_logits = batch_filter_end[i].detach().cpu().numpy().astype(args.dtype)
+                    context_feature = context_features[example_index.item()]
+                    unique_id = int(context_feature.unique_id)
+                    yield ContextResult(unique_id=unique_id,
+                                        start=start,
+                                        end=end,
+                                        span_logits=span_logits,
+                                        filter_start_logits=filter_start_logits,
+                                        filter_end_logits=filter_end_logits,
+                                        start_sp=b_ssp,
+                                        end_sp=b_esp)
+
+        t0 = time()
+        write_embed(context_examples, context_features, get_context_results(),
+                    args.max_answer_length, not args.do_case, args.dump_file)
+        logger.info('%s: %.1f mins' % (args.predict_file, (time() - t0) / 60))
 
 
 if __name__ == "__main__":

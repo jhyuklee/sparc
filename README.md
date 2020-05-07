@@ -1,5 +1,5 @@
 # Contextualized Sparse Representations (Sparc)
-This repository provides author's implementation of [Contextualized Sparse Representation for Real-Time Open-Domain Question Answering](https://arxiv.org/abs/1911.02896). You can train and evaluate DenSPI+Sparc described in our paper and make your own phrase index for a demo.
+This repository provides author's implementation of [Contextualized Sparse Representation for Real-Time Open-Domain Question Answering](https://arxiv.org/abs/1911.02896). You can train and evaluate DenSPI+Sparc described in our paper and make your own Sparc vector.
 
 ## Environment
 Please install the Conda environment as follows:
@@ -59,8 +59,105 @@ $ python train.py --data_dir $DATA_DIR --metadata_dir $BERT_DIR --output_dir $OU
 ```
 
 We also provide a pretrained DenSPI+Sparc as follows:
-* DenSPI+Sparc pre-trained on SQuAD - [link](https://drive.google.com/file/d/1z2ztW616zIh49EMJMXe_f_Xfcmq9EQ8k/view?usp=sharing)
+* DenSPI+Sparc pre-trained on SQuAD - [link](https://drive.google.com/file/d/1lObQ2lX8bWwJRzUuEqH6kpPdSTmS_Zxw/view?usp=sharing)
 
+
+## Sparc Embedding
+Given the pre-trained DenSPI+Sparc, you can get Sparc embedding with following commands. Example below assumes using our pre-trained weight ([`denspi_sparc.zip`](https://drive.google.com/file/d/1lObQ2lX8bWwJRzUuEqH6kpPdSTmS_Zxw/view?usp=sharing) unzipped in `denspi_sparc` folder). If you want to use your own model, please modify `MODEL_DIR` accordingly.
+
+For any type of text you want to embed, put them in each line of `input_examples.txt`. Then run:
+```bash
+$ export DATA_DIR=.
+$ export MODEL_DIR=denspi_sparc
+$ python train.py --data_dir $DATA_DIR --metadata_dir $BERT_DIR --output_dir $OUT_DIR --predict_file input_examples.txt --parallel --bert_model_option 'large_uncased' --do_load --load_dir $MODEL_DIR --load_epoch 1 --do_embed --dump_file output.json
+```
+
+The result file `output.json` will show Sparc embedding of input text ([CLS] representation, sorted by scores):
+```json
+{
+    "out": [
+        {
+            "text": "They defeated the Arizona Cardinals 49-15 in the NFC Championship Game and advanced to their second Super Bowl appearance since the franchise was founded in 1995.",
+            "sparc": {
+                "uni": {
+                    "1995": {
+                        "score": 1.6841894388198853,
+                        "vocab": "2786"
+                    },
+                    "second": {
+                        "score": 1.6321970224380493,
+                        "vocab": "2117"
+                    },
+                    "49": {
+                        "score": 1.6075607538223267,
+                        "vocab": "4749"
+                    },
+                    "arizona": {
+                        "score": 1.1734912395477295,
+                        "vocab": "5334"
+                    },
+                ...
+                },
+                "bi": {
+                    "arizona cardinals": {
+                        "score": 1.3190401792526245,
+                        "vocab": "5334, 9310"
+                    },
+                    "nfc championship": {
+                        "score": 1.1005975008010864,
+                        "vocab": "22309, 2528"
+                    },
+                    "49 -": {
+                        "score": 1.0863999128341675,
+                        "vocab": "4749, 1011"
+                    },
+                    "the arizona": {
+                        "score": 0.9722453951835632,
+                        "vocab": "1996, 5334"
+                    },
+                ...
+                }
+            }
+        }
+    ]
+}
+```
+Note that each text is segmented by the BERT tokenizer (`"vocab"` denotes BERT vocab index). To see how Sparc changes for each phrase, set `start_index` to the target token position. For instance, setting `start_index = 17` to embed Sparc of `415,000` of following text gives you:
+
+```json
+...
+            "text": "Between 1991 and 2000, the total area of forest lost in the Amazon rose from 415,000 to 587,000 square kilometres.",
+            "sparc": {
+                "uni": {
+                    "1991": {
+                        "score": 1.182684063911438,
+                        "vocab": "2889"
+                    },
+                    ...
+                    "2000": {
+                        "score": 0.41507360339164734,
+                        "vocab": "2456"
+                    },
+...
+```
+whereas setting `start_index = 21` to embed Sparc of `587,000` gives you:
+```json
+...
+            "text": "Between 1991 and 2000, the total area of forest lost in the Amazon rose from 415,000 to 587,000 square kilometres.",
+            "sparc": {
+                "uni": {
+                    ...
+                    "2000": {
+                        "score": 1.1923936605453491,
+                        "vocab": "2456"
+                    },
+                    ...
+                    "1991": {
+                        "score": 0.7090237140655518,
+                        "vocab": "2889"
+                    },
+...
+```
 
 ## Phrase Index
 For now, please see [the original DenSPI repository](https://github.com/uwnlp/denspi) or [the recent application of DenSPI in COVID-19 domain](https://github.com/dmis-lab/covidAsk) for building phrase index using DenSPI+Sparc.

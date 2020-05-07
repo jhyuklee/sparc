@@ -249,6 +249,35 @@ def read_squad_examples(input_file, return_answers, context_only=False, question
     return examples
 
 
+def read_text_examples(input_file, draft=False, draft_num_examples=12):
+    """Read a text file into a list of SquadExample."""
+    input_data = []
+    with open(input_file, "r") as reader:
+        for line in reader:
+            input_data.append(line.strip())
+
+    examples = []
+    # Only word-based tokenization is peformed (whitespace based)
+    for idx, text in enumerate(input_data):
+            # Note that we use the term 'word' for whitespace based words, and 'token' for subtokens (for BERT input)
+            doc_words, char_to_word_offset = context_to_words_and_offset(text)
+
+            # Using only context
+            example = SquadExample(
+                paragraph_text=text,
+                doc_words=doc_words,
+                doc_idx=idx,
+                par_idx=0,
+            )
+            examples.append(example)
+
+    if draft:
+        return examples[:draft_num_examples]
+
+    logger.info(f'Reading {len(examples)} examples')
+    return examples
+
+
 def convert_examples_to_features(examples, tokenizer, max_seq_length,
                                  doc_stride, max_query_length, return_answers, skip_no_answer,
                                  verbose=False, save_with_prob=False, msg="Converting examples"):
