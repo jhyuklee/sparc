@@ -29,7 +29,7 @@ $ wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-voc
 ```
 
 ## Model
-To train DenSPI+Sparc, use `train.py`. Trained models will be saved in `$OUT_DIR1`.
+To train DenSPI+Sparc on SQuAD, use `train.py`. Trained models will be saved in `$OUT_DIR1`.
 ```bash
 $ mkdir $OUT_DIR1
 # Train with BERT-base
