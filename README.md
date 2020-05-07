@@ -59,12 +59,12 @@ $ python train.py --data_dir $DATA_DIR --metadata_dir $BERT_DIR --output_dir $OU
 ```
 
 We also provide a pretrained DenSPI+Sparc as follows:
-* DenSPI+Sparc pre-trained on SQuAD - [link]
+* DenSPI+Sparc pre-trained on SQuAD - [link](https://drive.google.com/file/d/1z2ztW616zIh49EMJMXe_f_Xfcmq9EQ8k/view?usp=sharing)
 
 
 ## Phrase Index
-For now, please see [the original DenSPI repository](https://github.com/uwnlp/denspi) and [the recent application of DenSPI in COVID-19 domain](https://github.com/dmis-lab/covidAsk) for building phrase index using DenSPI+Sparc.
-The main changes in phrase indexing is in `mips_phrase.py` where Sparc is used for the open-domain QA inference (See [here](https://github.com/jhyuklee/sparc/blob/885729372706e227fa9c566ca51bd88de984710a/mips_phrase.py#L390-L410)).
+For now, please see [the original DenSPI repository](https://github.com/uwnlp/denspi) or [the recent application of DenSPI in COVID-19 domain](https://github.com/dmis-lab/covidAsk) for building phrase index using DenSPI+Sparc.
+The main changes in phrase indexing is in `post.py` and `mips_phrase.py` where Sparc is used for the open-domain QA inference (See [here](https://github.com/jhyuklee/sparc/blob/885729372706e227fa9c566ca51bd88de984710a/mips_phrase.py#L390-L410)).
 
 ## Reference
 ```
