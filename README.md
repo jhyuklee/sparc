@@ -40,7 +40,6 @@ $ python train.py --data_dir $DATA_DIR --metadata_dir $BERT_DIR --output_dir $OU
 
 The result will look like (in case of BERT-base):
 ```bash
-(...)
 04/28/2020 06:32:59 - INFO - post -   num vecs=45059736, num_words=1783576, nvpw=25.2637
 04/28/2020 06:33:01 - INFO - __main__ -   [Validation] loss: 8.700, b'{"exact_match": 75.10879848628193, "f1": 83.42143097917004}\n'
 ```
@@ -139,7 +138,6 @@ To see how Sparc changes for each phrase, set `start_index` in [here](https://gi
 ```
 whereas setting `start_index = 21` to embed Sparc of `587,000` gives you:
 ```json
-...
             "text": "Between 1991 and 2000, the total area of forest lost in the Amazon rose from 415,000 to 587,000 square kilometres.",
             "sparc": {
                 "uni": {
