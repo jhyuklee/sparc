@@ -72,7 +72,7 @@ $ export MODEL_DIR=denspi_sparc
 $ python train.py --data_dir $DATA_DIR --metadata_dir $BERT_DIR --output_dir $OUT_DIR --predict_file input_examples.txt --parallel --bert_model_option 'large_uncased' --do_load --load_dir $MODEL_DIR --load_epoch 1 --do_embed --dump_file output.json
 ```
 
-The result file `output.json` will show Sparc embedding of input text ([CLS] representation, sorted by scores):
+The result file `$OUT_DIR/output.json` will show Sparc embedding of the input text ([CLS] representation, sorted by scores). For instance:
 ```json
 {
     "out": [
@@ -120,7 +120,9 @@ The result file `output.json` will show Sparc embedding of input text ([CLS] rep
     ]
 }
 ```
-Note that each text is segmented by the BERT tokenizer (`"vocab"` denotes BERT vocab index). To see how Sparc changes for each phrase, set `start_index` to the target token position. For instance, setting `start_index = 17` to embed Sparc of `415,000` of following text gives you:
+Note that each text is segmented by the BERT tokenizer (`"vocab"` denotes the BERT vocab index).
+
+To see how Sparc changes for each phrase, set `start_index` to the target token position. For instance, setting `start_index = 17` to embed Sparc of `415,000` of the following text gives you (some n-grams are omitted):
 
 ```json
             "text": "Between 1991 and 2000, the total area of forest lost in the Amazon rose from 415,000 to 587,000 square kilometres.",
