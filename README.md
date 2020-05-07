@@ -96,7 +96,6 @@ The result file `output.json` will show Sparc embedding of input text ([CLS] rep
                         "score": 1.1734912395477295,
                         "vocab": "5334"
                     },
-                ...
                 },
                 "bi": {
                     "arizona cardinals": {
@@ -115,7 +114,6 @@ The result file `output.json` will show Sparc embedding of input text ([CLS] rep
                         "score": 0.9722453951835632,
                         "vocab": "1996, 5334"
                     },
-                ...
                 }
             }
         }
@@ -125,7 +123,6 @@ The result file `output.json` will show Sparc embedding of input text ([CLS] rep
 Note that each text is segmented by the BERT tokenizer (`"vocab"` denotes BERT vocab index). To see how Sparc changes for each phrase, set `start_index` to the target token position. For instance, setting `start_index = 17` to embed Sparc of `415,000` of following text gives you:
 
 ```json
-...
             "text": "Between 1991 and 2000, the total area of forest lost in the Amazon rose from 415,000 to 587,000 square kilometres.",
             "sparc": {
                 "uni": {
@@ -133,12 +130,10 @@ Note that each text is segmented by the BERT tokenizer (`"vocab"` denotes BERT v
                         "score": 1.182684063911438,
                         "vocab": "2889"
                     },
-                    ...
                     "2000": {
                         "score": 0.41507360339164734,
                         "vocab": "2456"
                     },
-...
 ```
 whereas setting `start_index = 21` to embed Sparc of `587,000` gives you:
 ```json
@@ -146,17 +141,14 @@ whereas setting `start_index = 21` to embed Sparc of `587,000` gives you:
             "text": "Between 1991 and 2000, the total area of forest lost in the Amazon rose from 415,000 to 587,000 square kilometres.",
             "sparc": {
                 "uni": {
-                    ...
                     "2000": {
                         "score": 1.1923936605453491,
                         "vocab": "2456"
                     },
-                    ...
                     "1991": {
                         "score": 0.7090237140655518,
                         "vocab": "2889"
                     },
-...
 ```
 
 ## Phrase Index
