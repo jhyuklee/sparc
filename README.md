@@ -1,5 +1,17 @@
-# Contextualized Sparse Representations (Sparc)
-This repository provides author's implementation of [Contextualized Sparse Representation for Real-Time Open-Domain Question Answering](https://arxiv.org/abs/1911.02896). You can train and evaluate DenSPI+Sparc described in our paper and make your own Sparc vector.
+<h3 align="center">
+<p>BioSyn
+<a href="https://github.com/jhyuklee/sparc/blob/master/LICENSE">
+   <img alt="GitHub" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg">
+</a>
+</h3>
+<div align="center">
+    <p> Contextualized Sparse Representations (<b>Sparc</b>)
+</div>
+
+<div align="center">
+  <img alt="Sparc Demo" src="https://github.com/dmis-lab/biosyn/blob/master/static/preview.png" width="500px">
+</div>
+This repository provides author's implementation of [Contextualized Sparse Representation for Real-Time Open-Domain Question Answering](https://arxiv.org/abs/1911.02896). You can train and evaluate DenSPI+Sparc described in our paper and make your own Sparc vector. You can try our open-domain QA demo at [http://sparc.korea.ac.kr](http://sparc.korea.ac.kr).
 
 ## Environment
 Please install the Conda environment as follows:
