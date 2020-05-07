@@ -1,7 +1,7 @@
 <h3 align="center">
 <p>Sparc
 <a href="https://github.com/jhyuklee/sparc/blob/master/LICENSE">
-   <img alt="GitHub" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg">
+   <img alt="GitHub" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" style="margin:0px;margin-top:10px;margin-bottom:10px">
 </a>
 </h3>
 <div align="center">
